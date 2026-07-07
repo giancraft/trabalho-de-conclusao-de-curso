@@ -1,0 +1,138 @@
+import { useEffect, useState } from 'react'
+import { Menu, Stethoscope } from 'lucide-react'
+import Sidebar from './components/Sidebar'
+import ChatWindow from './components/ChatWindow'
+import Composer from './components/Composer'
+import * as api from './api'
+import type { Feedback, Mensagem, Opcoes } from './types'
+
+export default function App() {
+  const [opcoes, setOpcoes] = useState<Opcoes | null>(null)
+  const [especialidade, setEspecialidade] = useState('Cardiologia')
+  const [dificuldade, setDificuldade] = useState('intermediário')
+
+  const [casoId, setCasoId] = useState<string | null>(null)
+  const [mensagens, setMensagens] = useState<Mensagem[]>([])
+  const [feedback, setFeedback] = useState<Feedback | null>(null)
+  const [ocupado, setOcupado] = useState(false)
+  const [digitando, setDigitando] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+  const [menuAberto, setMenuAberto] = useState(false)
+
+  useEffect(() => {
+    api
+      .buscarOpcoes()
+      .then(setOpcoes)
+      .catch(() => setErro('Backend indisponível. Inicie a API (uvicorn) e recarregue.'))
+  }, [])
+
+  async function novoCaso() {
+    setMenuAberto(false)
+    setOcupado(true)
+    setErro(null)
+    setFeedback(null)
+    setMensagens([])
+    setCasoId(null)
+    setDigitando(true)
+    try {
+      const caso = await api.criarCaso(especialidade, dificuldade)
+      setCasoId(caso.caso_id)
+      setMensagens([{ role: 'assistant', content: caso.apresentacao }])
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao criar o caso.')
+    } finally {
+      setDigitando(false)
+      setOcupado(false)
+    }
+  }
+
+  async function enviarMensagem(texto: string) {
+    if (!casoId) return
+    setOcupado(true)
+    setErro(null)
+    setMensagens((atual) => [...atual, { role: 'user', content: texto }])
+    setDigitando(true)
+    let comecou = false
+    try {
+      await api.enviarMensagem(casoId, texto, (chunk) => {
+        if (!comecou) {
+          comecou = true
+          setDigitando(false)
+          setMensagens((atual) => [...atual, { role: 'assistant', content: chunk }])
+        } else {
+          setMensagens((atual) => {
+            const copia = [...atual]
+            const ultima = copia[copia.length - 1]
+            copia[copia.length - 1] = { ...ultima, content: ultima.content + chunk }
+            return copia
+          })
+        }
+      })
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao enviar a mensagem.')
+    } finally {
+      setDigitando(false)
+      setOcupado(false)
+    }
+  }
+
+  async function darDiagnostico(texto: string) {
+    if (!casoId) return
+    setOcupado(true)
+    setErro(null)
+    setMensagens((atual) => [
+      ...atual,
+      { role: 'user', content: `Diagnóstico final: ${texto}` },
+    ])
+    setDigitando(true)
+    try {
+      setFeedback(await api.enviarDiagnostico(casoId, texto))
+      setCasoId(null) // caso encerrado no servidor
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Falha ao avaliar o diagnóstico.')
+    } finally {
+      setDigitando(false)
+      setOcupado(false)
+    }
+  }
+
+  return (
+    <div className="flex h-full bg-zinc-50 font-sans">
+      <Sidebar
+        opcoes={opcoes}
+        especialidade={especialidade}
+        dificuldade={dificuldade}
+        ocupado={ocupado}
+        aberta={menuAberto}
+        onFechar={() => setMenuAberto(false)}
+        onEspecialidade={setEspecialidade}
+        onDificuldade={setDificuldade}
+        onNovoCaso={novoCaso}
+      />
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2.5 md:hidden">
+          <button
+            onClick={() => setMenuAberto(true)}
+            className="rounded-lg p-1.5 text-zinc-600 hover:bg-zinc-100"
+            aria-label="Abrir menu"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <Stethoscope className="h-4 w-4 text-teal-600" />
+          <span className="text-sm font-semibold text-zinc-800">Simulador Clínico</span>
+        </header>
+        <ChatWindow
+          mensagens={mensagens}
+          digitando={digitando}
+          feedback={feedback}
+          erro={erro}
+          temCaso={mensagens.length > 0 || digitando}
+          onNovoCaso={novoCaso}
+        />
+        {casoId && !feedback && (
+          <Composer ocupado={ocupado} onMensagem={enviarMensagem} onDiagnostico={darDiagnostico} />
+        )}
+      </main>
+    </div>
+  )
+}
