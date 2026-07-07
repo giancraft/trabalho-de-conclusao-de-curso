@@ -64,6 +64,7 @@ Escolha uma condição da especialidade adequada ao nível (varie: não use semp
 
 Responda apenas com JSON, com exatamente estas chaves:
 {{
+  "titulo": "título curto (3 a 6 palavras) baseado na queixa/apresentação, SEM revelar nem sugerir o diagnóstico. Ex.: 'Dispneia progressiva aos esforços'",
   "gabarito": {{
     "diagnostico": "diagnóstico correto",
     "justificativa": "raciocínio fisiopatológico e achados-chave que fecham o diagnóstico"
@@ -80,7 +81,7 @@ Responda apenas com JSON, com exatamente estas chaves:
         temperature=0.9,  # variedade de condições entre casos
     )
     caso = _extrair_json(resp.choices[0].message.content)
-    if "gabarito" not in caso or "apresentacao" not in caso:
+    if any(chave not in caso for chave in ("titulo", "gabarito", "apresentacao")):
         raise ValueError(f"Caso gerado sem as chaves esperadas: {list(caso)}")
     return caso
 

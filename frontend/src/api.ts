@@ -1,4 +1,11 @@
-import type { CasoAberto, Feedback, Opcoes } from './types'
+import type {
+  CasoAberto,
+  ConversaCompleta,
+  ConversaResumo,
+  Feedback,
+  Opcoes,
+  Usuario,
+} from './types'
 
 async function checar(res: Response): Promise<Response> {
   if (!res.ok) {
@@ -12,6 +19,52 @@ const json = { 'Content-Type': 'application/json' }
 
 export async function buscarOpcoes(): Promise<Opcoes> {
   return (await checar(await fetch('/api/especialidades'))).json()
+}
+
+// --- autenticação (cookie httpOnly gerenciado pelo navegador) ---
+
+export async function registrar(nome: string, email: string, senha: string): Promise<Usuario> {
+  const res = await fetch('/api/auth/registro', {
+    method: 'POST',
+    headers: json,
+    body: JSON.stringify({ nome, email, senha }),
+  })
+  return (await checar(res)).json()
+}
+
+export async function login(email: string, senha: string): Promise<Usuario> {
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: json,
+    body: JSON.stringify({ email, senha }),
+  })
+  return (await checar(res)).json()
+}
+
+export async function logout(): Promise<void> {
+  await checar(await fetch('/api/auth/logout', { method: 'POST' }))
+}
+
+/** Usuário da sessão atual, ou null se não autenticado. */
+export async function eu(): Promise<Usuario | null> {
+  const res = await fetch('/api/auth/eu')
+  if (res.status === 401) return null
+  return (await checar(res)).json()
+}
+
+// --- histórico de conversas ---
+
+export async function listarConversas(): Promise<ConversaResumo[]> {
+  const res = await checar(await fetch('/api/conversas'))
+  return (await res.json()).conversas
+}
+
+export async function carregarConversa(id: string): Promise<ConversaCompleta> {
+  return (await checar(await fetch(`/api/conversas/${id}`))).json()
+}
+
+export async function apagarConversa(id: string): Promise<void> {
+  await checar(await fetch(`/api/conversas/${id}`, { method: 'DELETE' }))
 }
 
 export async function criarCaso(

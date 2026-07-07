@@ -3,9 +3,32 @@ export interface Opcoes {
   dificuldades: string[]
 }
 
+export interface Usuario {
+  nome: string
+  email: string
+}
+
 export interface CasoAberto {
   caso_id: string
+  titulo: string
   apresentacao: string
+}
+
+export interface ConversaResumo {
+  id: string
+  titulo: string
+  especialidade: string
+  status: 'aberta' | 'encerrada'
+  criada_em: string
+}
+
+export interface ConversaCompleta {
+  id: string
+  titulo: string
+  especialidade: string
+  status: 'aberta' | 'encerrada'
+  mensagens: Mensagem[]
+  feedback: Feedback | null
 }
 
 export interface Feedback {

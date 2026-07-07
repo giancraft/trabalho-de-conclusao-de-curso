@@ -7,26 +7,33 @@ Protótipo-base do TCC *"Sistema de apoio ao estudo médico baseado em inteligê
 
 ## Como funciona
 
-1. O estudante escolhe **especialidade** (Cardiologia, Oncologia...) e **dificuldade**.
-2. A IA sorteia uma condição oculta e apresenta o paciente (o gabarito fica **apenas no
-   servidor** — impossível ver pelo navegador).
-3. No chat, o estudante conduz a investigação: perguntas de anamnese, exame físico, exames.
-   As respostas chegam em **streaming**, como nos chats de IA conhecidos.
+1. O estudante **cria uma conta e faz login** (senha com hash bcrypt; sessão em cookie
+   httpOnly revogável — o token nunca é acessível por JavaScript).
+2. Escolhe **especialidade** (Cardiologia, Oncologia...) e **dificuldade**; a IA sorteia
+   uma condição oculta e apresenta o paciente (o gabarito fica **apenas no servidor** —
+   impossível ver pelo navegador).
+3. No chat, conduz a investigação: perguntas de anamnese, exame físico, exames. As
+   respostas chegam em **streaming**, como nos chats de IA conhecidos.
 4. Ao clicar em **"Dar diagnóstico"**, envia a hipótese final e recebe: acertos,
    inconsistências, hipóteses não consideradas e justificativa pedagógica, além do gabarito.
+5. **Todas as conversas persistem** (SQLite) e aparecem no menu lateral: casos abertos
+   podem ser retomados de onde pararam; encerrados abrem em leitura com o feedback.
 
 ## Arquitetura
 
 | Camada | Stack | Papel |
 |---|---|---|
 | `frontend/` | React + TypeScript + Vite + Tailwind CSS | Interface de chat (sidebar, mensagens, composer, feedback) |
-| `backend/`  | FastAPI + Groq (`llama-3.3-70b-versatile`) | Rotas da API, sessões de caso em memória, prompts e streaming |
+| `backend/`  | FastAPI + Groq (`llama-3.3-70b-versatile`) + SQLite | Rotas da API, autenticação, persistência, prompts e streaming |
 
 - `backend/ai.py` — integração com a IA: `novo_caso()` (JSON mode), `responder_chat()`
   (streaming), `avaliar_diagnostico()` (JSON mode).
-- `backend/main.py` — rotas `/api/especialidades`, `/api/casos`,
-  `/api/casos/{id}/mensagens`, `/api/casos/{id}/diagnostico`.
+- `backend/db.py` — persistência em SQLite (stdlib): usuários, sessões, conversas, mensagens.
+- `backend/auth.py` — registro/login/logout com bcrypt e cookie de sessão httpOnly.
+- `backend/main.py` — rotas de casos (`/api/casos...`) e histórico (`/api/conversas...`).
 - `frontend/src/api.ts` — cliente tipado da API, incluindo leitura do stream.
+
+O banco (`backend/dados.db`) é criado automaticamente na primeira execução.
 
 ## Rodando (dois processos)
 
@@ -48,11 +55,12 @@ npm run dev                           # http://localhost:5173 (proxy /api -> :80
 
 ```bash
 python backend/ai.py      # self-check do parser JSON (sem rede)
+python backend/db.py      # self-check do CRUD em banco na memória (sem rede)
 cd frontend && npm run build   # type-check (tsc) + build
 ```
 
 ## Escopo do protótipo
 
-Somente o núcleo de simulação de casos. Ficam para o TCC: persistência/banco, login,
-flashcards com repetição espaçada, painel adaptativo e ancoragem RAG em base curada.
-Uso estritamente educacional — não fornece orientação clínica real.
+Núcleo de simulação de casos + contas/persistência. Ficam para o TCC: flashcards com
+repetição espaçada, painel adaptativo, ancoragem RAG em base curada, recuperação de senha
+e Postgres. Uso estritamente educacional — não fornece orientação clínica real.
