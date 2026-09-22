@@ -1,46 +1,21 @@
-export interface Opcoes {
-  especialidades: string[]
-  dificuldades: string[]
-}
+/**
+ * Tipos da API — apelidos sobre o schema gerado a partir do OpenAPI do backend.
+ *
+ * Nada aqui é escrito à mão: `types.generated.ts` sai de `npm run gen:types` e os nomes
+ * abaixo existem só para o resto do frontend continuar importando `Feedback` em vez de
+ * `components['schemas']['Feedback']`.
+ *
+ * Mudou a API? Rode `npm run gen:types` (com o backend no ar) — o type-check aponta o
+ * que quebrou, em vez de a divergência aparecer em runtime.
+ */
+import type { components } from './types.generated'
 
-export interface Usuario {
-  nome: string
-  email: string
-}
+type Schemas = components['schemas']
 
-export interface CasoAberto {
-  caso_id: string
-  titulo: string
-  apresentacao: string
-}
-
-export interface ConversaResumo {
-  id: string
-  titulo: string
-  especialidade: string
-  status: 'aberta' | 'encerrada'
-  criada_em: string
-}
-
-export interface ConversaCompleta {
-  id: string
-  titulo: string
-  especialidade: string
-  status: 'aberta' | 'encerrada'
-  mensagens: Mensagem[]
-  feedback: Feedback | null
-}
-
-export interface Feedback {
-  acertou: boolean
-  diagnostico_correto: string
-  acertos: string[]
-  inconsistencias: string[]
-  hipoteses_nao_consideradas: string[]
-  justificativa_pedagogica: string
-}
-
-export interface Mensagem {
-  role: 'user' | 'assistant'
-  content: string
-}
+export type Opcoes = Schemas['Opcoes']
+export type Usuario = Schemas['UsuarioPublico']
+export type CasoAberto = Schemas['CasoAberto']
+export type ConversaResumo = Schemas['CasoResumo']
+export type ConversaCompleta = Schemas['CasoLeitura']
+export type Feedback = Schemas['Feedback']
+export type Mensagem = Schemas['MensagemLeitura']

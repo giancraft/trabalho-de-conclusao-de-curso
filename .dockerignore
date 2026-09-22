@@ -1,0 +1,13 @@
+.git
+.gitignore
+.idea
+.venv
+__pycache__
+*.pyc
+node_modules
+frontend/dist
+*.db
+
+# Nunca entra na imagem: em dev os segredos chegam por variável de ambiente,
+# injetados pelo compose a partir do .env do host.
+.env

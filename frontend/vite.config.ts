@@ -7,7 +7,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8000',
+      // No container o backend é alcançado pelo nome do serviço; fora dele, por
+      // localhost. O compose define VITE_API_PROXY; rodando o Vite no host, o
+      // default vale.
+      '/api': process.env.VITE_API_PROXY ?? 'http://localhost:8000',
     },
   },
 })

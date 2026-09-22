@@ -1,0 +1,85 @@
+# Um arquivo, dois caminhos, escolhidos por profile:
+#
+#   dev  → docker compose up            (COMPOSE_PROFILES=dev vem do .env)
+#   prod → COMPOSE_PROFILES=prod docker compose up --build -d
+#
+# Em dev o código entra por bind mount e o Vite roda como serviço. Em prod o stage
+# `prod` do Dockerfile já embute o frontend construído na imagem do backend: um
+# processo, uma origem, sem CORS.
+
+x-backend: &backend
+  build:
+    context: .
+  environment: &backend-env
+    DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/simulador
+    GROQ_API_KEY: ${GROQ_API_KEY:?defina GROQ_API_KEY no .env do host}
+    GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+  depends_on:
+    db:
+      condition: service_healthy
+  ports:
+    - "8000:8000"
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: simulador
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Sem o healthcheck o backend sobe antes do Postgres aceitar conexão e
+    # quebra na primeira migração.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d simulador"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    <<: *backend
+    profiles: [dev]
+    build:
+      context: .
+      target: dev
+    environment:
+      <<: *backend-env
+      APP_ENV: development
+    volumes:
+      - ./backend:/app/backend
+
+  backend-prod:
+    <<: *backend
+    profiles: [prod]
+    build:
+      context: .
+      target: prod
+    environment:
+      <<: *backend-env
+      # Liga o `secure` no cookie de sessão e desliga o CORS (ver core/config.py).
+      APP_ENV: production
+    restart: unless-stopped
+
+  frontend:
+    profiles: [dev]  # em prod o backend serve o build; não há Vite
+    image: node:22-slim
+    working_dir: /fe
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    environment:
+      # Dentro do container, localhost é o próprio frontend — o proxy precisa
+      # apontar para o serviço do backend pelo nome.
+      VITE_API_PROXY: http://backend:8000
+    volumes:
+      - ./frontend:/fe
+      # Volume anônimo: sem ele o bind mount acima sobrescreve o node_modules
+      # instalado no container com o do host. É a pegadinha clássica.
+      - /fe/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

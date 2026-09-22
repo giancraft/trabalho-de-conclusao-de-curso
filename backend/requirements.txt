@@ -1,5 +1,19 @@
-fastapi
-uvicorn
-groq
-python-dotenv
-bcrypt
+# Versões fixas: sem isso o build de setembro difere do de agosto e o ambiente
+# deixa de ser reproduzível para a banca.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+groq==1.7.0
+python-dotenv==1.2.3
+bcrypt==5.0.0
+pydantic==2.13.5
+
+# Persistência: SQLModel dá tabela e schema de API na mesma classe; asyncpg é o driver
+# async; alembic versiona o schema.
+sqlmodel==0.0.42
+sqlalchemy[asyncio]==2.0.54
+asyncpg==0.31.0
+alembic==1.20.0
+
+# Só habilita o tipo Vector. Nada é construído sobre ele aqui — é a infraestrutura do
+# RF04 (RAG), que entra em setembro.
+pgvector==0.5.0
