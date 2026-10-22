@@ -1,7 +1,7 @@
 """Integração com a IA Generativa (Groq) — motor lógico do simulador de casos clínicos.
 
 Três funções expostas:
-- novo_caso():           sorteia uma condição oculta na especialidade e abre o caso
+- novo_caso():           abre o caso sobre a condição sorteada no corpus (RF04)
 - responder_chat():      responde ao estudante como paciente/tutor, em streaming
 - avaliar_diagnostico(): feedback formativo estruturado ao fechar o diagnóstico
 
@@ -15,6 +15,7 @@ nela é um worker que não atende mais ninguém.
 
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,7 +28,11 @@ MODELO = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 TURNOS_CHAT = 8
 TURNOS_AVALIACAO = 30
 
+# Grandes áreas das DCN 2014, agrupadas: Clínica Médica, demais áreas do currículo e
+# especialidades focais. Anestesiologia, Radiologia, Patologia e Medicina Legal ficam de
+# fora — não cabem no fluxo único anamnese → exame físico → exames → diagnóstico.
 ESPECIALIDADES = [
+    # Clínica Médica
     "Cardiologia",
     "Pneumologia",
     "Endocrinologia",
@@ -36,6 +41,22 @@ ESPECIALIDADES = [
     "Nefrologia",
     "Infectologia",
     "Oncologia",
+    "Hematologia",
+    "Reumatologia",
+    "Dermatologia",
+    "Geriatria",
+    # Grandes áreas do currículo
+    "Pediatria",
+    "Ginecologia e Obstetrícia",
+    "Cirurgia Geral",
+    "Psiquiatria",
+    "Medicina de Emergência",
+    "Medicina de Família e Comunidade",
+    # Focais
+    "Ortopedia e Traumatologia",
+    "Urologia",
+    "Oftalmologia",
+    "Otorrinolaringologia",
 ]
 
 DIFICULDADES = ["básico", "intermediário", "avançado"]
@@ -151,16 +172,83 @@ def _extrair_json(texto: str) -> dict:
         return json.loads(texto[ini : fim + 1])
 
 
-async def novo_caso(especialidade: str, dificuldade: str) -> CasoGerado:
+def _referencia(contexto: str, citar: bool = False) -> str:
+    """Bloco de material de referência para o prompt (vazio se não houver RAG).
+
+    As fontes chegam numeradas ([1], [2]...) e com o tipo. A hierarquia é o que mantém o
+    caso brasileiro mesmo quando a literatura vem de fora: critério e conduta seguem o
+    SUS; artigo só entra para quadro clínico e epidemiologia.
+    """
+    if not contexto:
+        return ""
+    citacao = (
+        "Cite a fonte de cada afirmação clínica com o número entre colchetes logo depois "
+        "dela, ex.: [1] ou [1, 2]. Use só os números do material."
+        if citar
+        else "Não cite fontes, números nem títulos no texto do caso."
+    )
+    return (
+        "\n\nMATERIAL DE REFERÊNCIA — fontes numeradas, cada uma com o tipo. Para "
+        "critérios diagnósticos e conduta, siga nesta ordem: PCDT (Ministério da Saúde) > "
+        "Diretriz (sociedade médica) > Revisão e Relato de caso. A literatura serve só "
+        "para apresentação clínica e epidemiologia; se contradisser uma diretriz "
+        "brasileira, a diretriz vence. Parte do material está em inglês: escreva em "
+        "português, com a terminologia e as condutas do SUS. Não copie o texto. "
+        f"{citacao}\n"
+        f'"""\n{contexto}\n"""'
+    )
+
+
+# "[1]", "[1, 2]" — com o espaço antes, para a remoção não deixar "texto ." para trás.
+_CITACAO = re.compile(r"\s*\[(\d+(?:\s*,\s*\d+)*)\]")
+_FONTE_NUMERADA = re.compile(r"^\[(\d+)\] ", re.MULTILINE)
+
+
+def filtrar_citacoes(texto: str, validos: set[int]) -> str:
+    """Mantém só as citações [n] de fontes que estão no material; o resto sai.
+
+    O modelo pode inventar um [4] com três fontes: citação para fonte inexistente é
+    pior que nenhuma, porque parece rastreável e não é.
+    """
+
+    def troca(m: re.Match) -> str:
+        ns = dict.fromkeys(n for n in map(int, m.group(1).split(",")) if n in validos)
+        return f" [{', '.join(map(str, ns))}]" if ns else ""
+
+    return _CITACAO.sub(troca, texto)
+
+
+async def novo_caso(
+    especialidade: str, dificuldade: str, condicao: str = "", contexto: str = ""
+) -> CasoGerado:
     """Gera o caso: gabarito oculto (fica só no servidor) + mensagem de abertura.
+
+    Com `condicao`, a condição vem do sorteio no corpus curado (RN01) e os achados se
+    apoiam em `contexto` (RF04). Sem ela — corpus vazio —, o modelo escolhe sozinho,
+    como no protótipo: o sistema degrada, não quebra.
 
     O formato sai do schema de `CasoGerado`, não de um JSON escrito no prompt — as
     descrições dos campos viajam junto e não há duas versões para manter em sincronia.
     """
+    if condicao:
+        tema = (
+            f"O caso é sobre: {condicao}. Escreva o diagnóstico do gabarito com o nome "
+            "usado no Brasil."
+        )
+        if contexto:
+            tema += (
+                " Tire idade, sexo, queixa, história e achados do material de referência "
+                "abaixo, sem contradizê-lo."
+            )
+    else:
+        tema = (
+            "Escolha uma condição da especialidade adequada ao nível (varie: não use "
+            "sempre as mais óbvias)."
+        )
     prompt = f"""Crie UM caso clínico educacional de {especialidade}, nível {dificuldade},
 para o estudante diagnosticar SEM saber a resposta.
 
-Escolha uma condição da especialidade adequada ao nível (varie: não use sempre as mais óbvias)."""
+{tema}{_referencia(contexto)}"""
     resp = await _client().chat.completions.create(
         model=MODELO,
         messages=[
@@ -168,9 +256,19 @@ Escolha uma condição da especialidade adequada ao nível (varie: não use semp
             {"role": "user", "content": prompt},
         ],
         response_format=_formato(CasoGerado),
-        temperature=0.9,  # variedade de condições entre casos
+        # Com a condição sorteada, a variedade já vem do corpus; a temperatura alta só
+        # servia para o modelo não repetir sempre as mesmas condições.
+        temperature=0.6 if condicao else 0.9,
     )
-    return CasoGerado.model_validate(_extrair_json(resp.choices[0].message.content))
+    caso = CasoGerado.model_validate(_extrair_json(resp.choices[0].message.content))
+    # O estudante vê título e apresentação com o caso aberto: um "[1]" ali apontaria para
+    # a fonte — e o título da fonte é o diagnóstico (RN06).
+    return caso.model_copy(
+        update={
+            "titulo": filtrar_citacoes(caso.titulo, set()),
+            "apresentacao": filtrar_citacoes(caso.apresentacao, set()),
+        }
+    )
 
 
 def _system_tutor(especialidade: str, gabarito: Gabarito) -> str:
@@ -212,9 +310,17 @@ async def responder_chat(
 
 
 async def avaliar_diagnostico(
-    especialidade: str, gabarito: dict | Gabarito, historico: list[dict], diagnostico: str
+    especialidade: str,
+    gabarito: dict | Gabarito,
+    historico: list[dict],
+    diagnostico: str,
+    contexto: str = "",
 ) -> Feedback:
-    """Feedback formativo (RN02: explicativo, nunca só classificatório)."""
+    """Feedback formativo (RN02: explicativo, nunca só classificatório).
+
+    `contexto` traz o diagnóstico diferencial e a conduta da fonte do caso (RF04): é o
+    que dá respaldo às hipóteses não consideradas e à justificativa pedagógica.
+    """
     conversa = "\n".join(
         f"[{m['role']}] {m['content']}" for m in _janela(historico, TURNOS_AVALIACAO)
     )
@@ -233,7 +339,7 @@ DIAGNÓSTICO DO ESTUDANTE:
 \"\"\"
 
 Avalie o raciocínio ao longo da investigação e o diagnóstico final.
-Seja construtivo e explicativo; não atribua nota numérica."""
+Seja construtivo e explicativo; não atribua nota numérica.{_referencia(contexto, citar=True)}"""
     resp = await _client().chat.completions.create(
         model=MODELO,
         messages=[
@@ -243,7 +349,16 @@ Seja construtivo e explicativo; não atribua nota numérica."""
         response_format=_formato(Feedback),
         temperature=0.4,
     )
-    return Feedback.model_validate(_extrair_json(resp.choices[0].message.content))
+    fb = Feedback.model_validate(_extrair_json(resp.choices[0].message.content))
+    validos = set(map(int, _FONTE_NUMERADA.findall(contexto)))
+    return fb.model_copy(
+        update={
+            "acertos": [filtrar_citacoes(t, validos) for t in fb.acertos],
+            "inconsistencias": [filtrar_citacoes(t, validos) for t in fb.inconsistencias],
+            "hipoteses_nao_consideradas": [filtrar_citacoes(t, validos) for t in fb.hipoteses_nao_consideradas],
+            "justificativa_pedagogica": filtrar_citacoes(fb.justificativa_pedagogica, validos),
+        }
+    )
 
 
 if __name__ == "__main__":
@@ -298,4 +413,19 @@ if __name__ == "__main__":
     except ValidationError:
         pass
 
-    print("OK: parser, janela deslizante, schema strict e validação do gabarito.")
+    # 6. Bloco de referência só aparece com RAG — sem corpus, o prompt é o do protótipo.
+    assert _referencia("") == ""
+    assert "## Diagnóstico" in _referencia("## Diagnóstico\n\nECG") and "Ministério da Saúde" in _referencia("x")
+    assert "Cite a fonte" in _referencia("x", citar=True) and "Não cite" in _referencia("x")
+
+    # 7. Citações: só as de fontes que existem no material; o resto some sem deixar
+    #    espaço sobrando. O número das fontes sai do próprio contexto.
+    assert filtrar_citacoes("Troponina elevada [1].", {1}) == "Troponina elevada [1]."
+    assert filtrar_citacoes("ECG [1, 4] e eco [3].", {1, 2}) == "ECG [1] e eco."
+    assert filtrar_citacoes("Sem citação [2] .", set()) == "Sem citação ."
+    assert filtrar_citacoes("Duplicada [2,2].", {2}) == "Duplicada [2]."
+    assert filtrar_citacoes("Ano 2024 e lista [a].", {1}) == "Ano 2024 e lista [a].", "só números entre colchetes"
+    ctx = "[1] PCDT — Asma (MS, 2026)\n\n## Diagnóstico\n\ntexto [9]\n\n[2] Diretriz — X (Y, 2025)"
+    assert set(map(int, _FONTE_NUMERADA.findall(ctx))) == {1, 2}, "[9] no meio do texto não é fonte"
+
+    print("OK: parser, janela deslizante, schema strict, gabarito, bloco de referência e citações.")

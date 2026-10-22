@@ -1,10 +1,16 @@
 FROM python:3.13-slim AS base
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/opt/hf
 WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && useradd --create-home app
+# O modelo de embedding (o mesmo de rag/embeddings.py) é baixado no build: sem isto o
+# container depende de rede no boot e o primeiro request trava no download.
+RUN python -c "from sentence_transformers import SentenceTransformer as S; \
+S('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')"
+ENV HF_HUB_OFFLINE=1
 
 
 FROM base AS dev

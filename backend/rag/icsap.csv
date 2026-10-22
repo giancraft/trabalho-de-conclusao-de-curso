@@ -1,0 +1,90 @@
+grupo,cid_inicio,cid_fim
+1.01 Coqueluche,A370,A379
+1.02 Difteria,A360,A369
+1.03 Tétano,A330,A359
+1.04 Parotidite,B260,B269
+1.05 Rubéola,B060,B069
+1.06 Sarampo,B050,B059
+1.07 Febre Amarela,A950,A959
+1.08 Hepatite B,B160,B169
+1.09 Meningite por Haemophilus,G000,G000
+1.10 Meningite Tuberculosa,A170,A170
+1.11 Tuberculose Miliar,A190,A199
+1.12 Tuberculose Pulmonar,A150,A159
+1.12 Tuberculose Pulmonar,A160,A169
+1.12 Tuberculose Pulmonar,A171,A179
+1.16 Outras Tuberculoses,A180,A189
+1.17 Febre Reumática,I000,I029
+1.18 Sífilis,A510,A539
+1.19 Malária,B500,B549
+1.20 Ascaridíase,B770,B779
+2.01 Desidratação,E860,E869
+2.02 Gastroenterites,A000,A099
+3.01 Anemia por deficiência de ferro,D500,D509
+4.01 Kwashiokor/out.formas desnut. prot. calórica,E400,E469
+4.02 Outras deficiências nutricionais,E500,E649
+5.01 Otite média supurativa,H660,H669
+5.02 Nasofaringite aguda [resfriado comum],J000,J009
+5.03 Sinusite aguda,J010,J019
+5.04 Faringite aguda,J020,J029
+5.05 Amigdalite aguda,J030,J039
+5.06 Infecção aguda VAS,J060,J069
+"5.07 Rinite, nasofaringite e faringite crônicas",J310,J319
+6.01 Pneumonia pneumocócica,J130,J139
+6.02 Pneumonia por Haemophilus infuenzae,J140,J149
+6.03 Pneumonia por Streptococus,J153,J154
+6.04 Pneumonia bacteriana NE,J158,J159
+6.05 Pneumonia lobar NE,J181,J181
+7. Asma,J450,J469
+8.01 Bronquite aguda,J200,J219
+8.02 Bronquite ñ especif como aguda ou crônica,J400,J409
+8.03 Bronquite crônica simples e a mucopurulenta,J410,J419
+8.04 Bronquite crônica não especificada,J420,J429
+8.05 Enfisema,J430,J439
+8.06 Bronquectasia,J470,J479
+8.07 Outras doenças pulmonares obstrutiv crônicas,J440,J449
+9.01 Hipertensão essencial,I100,I109
+9.02 Doença cardíaca hipertensiva,I110,I119
+10.1 Angina pectoris,I200,I209
+11.1 Insuficiência cardíaca,I500,I509
+11.2 Edema agudo de pulmão,J810,J819
+12. Doenças cerebrovasculares,I630,I679
+12. Doenças cerebrovasculares,I690,I699
+12. Doenças cerebrovasculares,G450,G469
+13.1 Com coma ou cetoacidose,E100,E101
+13.1 Com coma ou cetoacidose,E110,E111
+13.1 Com coma ou cetoacidose,E120,E121
+13.1 Com coma ou cetoacidose,E130,E131
+13.1 Com coma ou cetoacidose,E140,E141
+"13.2 Com complicações (renais,oftalm. etc.)",E102,E108
+"13.2 Com complicações (renais,oftalm. etc.)",E112,E118
+"13.2 Com complicações (renais,oftalm. etc.)",E122,E128
+"13.2 Com complicações (renais,oftalm. etc.)",E132,E138
+"13.2 Com complicações (renais,oftalm. etc.)",E142,E148
+13.3 Sem complicações específicas,E109,E109
+13.3 Sem complicações específicas,E119,E119
+13.3 Sem complicações específicas,E129,E129
+13.3 Sem complicações específicas,E139,E139
+13.3 Sem complicações específicas,E149,E149
+14. Epilepsias,G400,G419
+15.1 Nefrite túbulo-intersticial aguda,N100,N109
+15.2 Nefrite túbulo-intersticial crônica,N110,N119
+15.3 Nefrite túbulo-intersticial NE aguda crônica,N120,N129
+15.4 Cistite,N300,N309
+15.5 Uretrite,N340,N349
+15.6 Infecção do trato urinário de localização NE,N390,N390
+16.1 Erisipela,A460,A469
+16.2 Impetigo,L010,L019
+16.3 Abscesso cutâneo furúnculo e carbúnculo,L020,L029
+16.4 Celulite,L030,L039
+16.5 Linfadenite aguda,L040,L049
+17.1 Salpingite e ooforite,N700,N709
+17.2 Doença inflamatória do útero exceto o colo,N710,N719
+17.3 Doença inflamatória do colo do útero,N720,N729
+17.5 Doenças da glândula de Bartholin,N750,N759
+17.6 Outras afecções inflam. da vagina e da vulva,N760,N769
+18. Úlcera gastrointestinal,K250,K289
+18. Úlcera gastrointestinal,K920,K922
+19.1 Infecção no trato urinário na gravidez,O230,O239
+19.2 Sífilis congênita,A500,A509
+19.3 Síndrome da rubéola congênita,P350,P350

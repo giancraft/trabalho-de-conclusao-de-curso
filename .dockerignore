@@ -11,3 +11,7 @@ frontend/dist
 # Nunca entra na imagem: em dev os segredos chegam por variável de ambiente,
 # injetados pelo compose a partir do .env do host.
 .env
+
+# Capítulos extraídos do FTP da NLM (python -m rag.catalogo extrair): reproduzíveis,
+# e a imagem não precisa deles — a ingestão roda uma vez contra o banco.
+backend/rag/corpus/

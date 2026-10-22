@@ -193,7 +193,8 @@ export interface components {
          * @description Caso como o estudante pode vê-lo.
          *
          *     ⚠️ Sem `gabarito` — é o que garante a RN06. Casos encerrados expõem o diagnóstico
-         *     correto por `feedback.diagnostico_correto`, e só então.
+         *     correto por `feedback.diagnostico_correto`, e só então. O mesmo vale para `fontes`:
+         *     o título do capítulo É o diagnóstico, então num caso aberto a lista vem vazia.
          */
         CasoLeitura: {
             /** Id */
@@ -210,6 +211,8 @@ export interface components {
             /** Mensagens */
             mensagens: components["schemas"]["MensagemLeitura"][];
             feedback: components["schemas"]["Feedback"] | null;
+            /** Fontes */
+            fontes: components["schemas"]["FonteLeitura"][];
         };
         /** CasoResumo */
         CasoResumo: {
@@ -264,6 +267,29 @@ export interface components {
              * @description explicação didática conectando os achados do caso à fisiopatologia do diagnóstico correto
              */
             justificativa_pedagogica: string;
+        };
+        /**
+         * FonteLeitura
+         * @description Referência numerada do caso (RF14): a citação ABNT, não o trecho.
+         *
+         *     `numero` é o mesmo [n] citado no texto do feedback; `secoes` diz de onde, dentro do
+         *     documento, veio o que foi usado.
+         */
+        FonteLeitura: {
+            /** Numero */
+            numero: number;
+            /** Tipo */
+            tipo: string;
+            /** Citacao */
+            citacao: string;
+            /** Destaque */
+            destaque: string;
+            /** Url */
+            url: string;
+            /** Licenca */
+            licenca: string;
+            /** Secoes */
+            secoes: components["schemas"]["SecaoConsultada"][];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -324,6 +350,13 @@ export interface components {
             email: string;
             /** Senha */
             senha: string;
+        };
+        /** SecaoConsultada */
+        SecaoConsultada: {
+            /** Titulo */
+            titulo: string;
+            /** Url */
+            url: string;
         };
         /** UsuarioPublico */
         UsuarioPublico: {

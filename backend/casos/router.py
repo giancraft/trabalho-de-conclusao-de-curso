@@ -1,4 +1,4 @@
-"""Rotas de casos clínicos e do histórico de conversas (RF03, RF05–RF07, RF13).
+"""Rotas de casos clínicos e do histórico de conversas (RF03–RF07, RF13, RF14).
 
 As rotas mantêm o prefixo /api/conversas do protótipo; no banco a entidade se chama
 `caso_clinico`, conforme a modelagem do TCC (ver models.py).
@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 from auth.router import usuario_atual
 from casos import ai
@@ -19,11 +20,16 @@ from models import (
     CasoClinico,
     CasoLeitura,
     CasoResumo,
+    FonteLeitura,
     ListaCasos,
     Opcoes,
     Resposta,
+    SecaoConsultada,
+    Trecho,
     Usuario,
 )
+from rag import busca
+from rag.citacao import citacao_abnt, url_secao
 
 router = APIRouter(prefix="/api", tags=["casos"])
 
@@ -80,6 +86,39 @@ def _gravar_resposta_em_background(caso_id: str, texto: str) -> None:
     tarefa.add_done_callback(_gravacoes.discard)
 
 
+async def _referencias(s: AsyncSession, caso_id: str) -> list[FonteLeitura]:
+    """Lista de referências do caso, numerada como no texto do feedback (RF14).
+
+    Junta as duas etapas: cada fonte aparece uma vez, com as seções de onde saíram os
+    trechos que foram ao prompt — na geração do caso e na avaliação.
+    """
+    por_fonte: dict[int, tuple[int, object, set[int]]] = {}
+    for uso, fonte in await db.fontes_do_caso(s, caso_id):
+        por_fonte.setdefault(fonte.id, (uso.numero, fonte, set()))[2].update(uso.trechos)
+    ids = {i for _, _, usados in por_fonte.values() for i in usados}
+    trechos = {t.id: t for t in (await s.execute(select(Trecho).where(Trecho.id.in_(ids)))).scalars()}
+
+    referencias = []
+    for numero, fonte, usados in sorted(por_fonte.values(), key=lambda x: x[0]):
+        secoes = dict.fromkeys(
+            (trechos[i].secao, trechos[i].secao_id)
+            for i in sorted(usados & trechos.keys(), key=lambda i: trechos[i].ordem)
+        )
+        citacao, destaque = citacao_abnt(fonte, fonte.recuperada_em.date())
+        referencias.append(
+            FonteLeitura(
+                numero=numero,
+                tipo=fonte.tipo,
+                citacao=citacao,
+                destaque=destaque,
+                url=fonte.url,
+                licenca=fonte.licenca,
+                secoes=[SecaoConsultada(titulo=t, url=url_secao(fonte.url, sid)) for t, sid in secoes],
+            )
+        )
+    return referencias
+
+
 @router.get("/especialidades", response_model=Opcoes)
 async def especialidades():
     return Opcoes(especialidades=ai.ESPECIALIDADES, dificuldades=ai.DIFICULDADES)
@@ -103,6 +142,9 @@ async def abrir(
     # O gabarito fica de fora, e `CasoLeitura` não tem o campo — mesmo que alguém o
     # acrescente aqui por engano, o response_model não o deixa passar (RN06).
     # Casos encerrados expõem o diagnóstico por feedback.diagnostico_correto.
+    # As fontes seguem o mesmo critério do feedback: o título do capítulo É o
+    # diagnóstico, então num caso aberto elas não saem daqui.
+    fontes = await _referencias(s, caso_id) if caso.status == "encerrada" else []
     return CasoLeitura(
         id=caso.id,
         titulo=caso.titulo,
@@ -110,6 +152,7 @@ async def abrir(
         status=caso.status,
         mensagens=_historico(respostas),
         feedback=caso.feedback,
+        fontes=fontes,
     )
 
 
@@ -133,8 +176,25 @@ async def criar_caso(
         raise HTTPException(422, f"Especialidade inválida: {corpo.especialidade}")
     if corpo.dificuldade not in ai.DIFICULDADES:
         raise HTTPException(422, f"Dificuldade inválida: {corpo.dificuldade}")
+    # A condição sai do corpus antes de o LLM escrever qualquer coisa (RN01): PCDT ou
+    # relato de caso, sem repetir para este estudante. Junto vêm as fontes de apoio —
+    # o PCDT ou a diretriz brasileira mais próximos —, numeradas [1], [2]... (RF04).
+    # Corpus vazio → nenhuma fonte → caso sem ancoragem: o sistema degrada, não quebra.
+    blocos = []
+    fonte = await busca.sortear_fonte(s, corpo.especialidade, corpo.dificuldade, usuario.id)
+    if fonte:
+        blocos.append((fonte, await busca.material(s, fonte, "caso")))
+        for apoio in await busca.fontes_de_apoio(s, fonte):
+            if trechos := await busca.material(s, apoio, "caso", principal=False):
+                blocos.append((apoio, trechos))
+    numerados = [(n, f, ts) for n, (f, ts) in enumerate(blocos, 1)]
     try:
-        caso = await ai.novo_caso(corpo.especialidade, corpo.dificuldade)
+        caso = await ai.novo_caso(
+            corpo.especialidade,
+            corpo.dificuldade,
+            fonte.titulo if fonte else "",
+            busca.contexto(numerados),
+        )
     except Exception as e:  # noqa: BLE001 — erro amigável, sem stack trace no cliente
         raise HTTPException(502, f"Falha ao gerar o caso: {e}")
 
@@ -145,6 +205,7 @@ async def criar_caso(
         corpo.especialidade,
         corpo.dificuldade,
         caso.gabarito.model_dump(),
+        fontes=[(f.id, n, [t.id for t in ts]) for n, f, ts in numerados],
     )
     await db.adicionar_resposta(s, caso_id, "assistant", caso.apresentacao)
     return CasoAberto(caso_id=caso_id, titulo=caso.titulo, apresentacao=caso.apresentacao)
@@ -207,12 +268,25 @@ async def diagnosticar(
     caso, respostas = await _caso_do_usuario(s, caso_id, usuario.id)
     if caso.status != "aberta":
         raise HTTPException(409, "Este caso já foi encerrado.")
+    # As fontes do caso já são conhecidas, com os mesmos números: o feedback cita [n]
+    # e o estudante acha a referência certa na lista. Puxar critérios, diferencial e
+    # conduta delas é mais preciso que refazer a busca.
+    blocos = [
+        (uso.numero, fonte, await busca.material(s, fonte, "feedback", principal=uso.numero == 1))
+        for uso, fonte in await db.fontes_do_caso(s, caso_id, etapa="caso")
+    ]
     try:
         feedback = await ai.avaliar_diagnostico(
-            caso.especialidade, caso.gabarito, _historico(respostas), corpo.diagnostico
+            caso.especialidade,
+            caso.gabarito,
+            _historico(respostas),
+            corpo.diagnostico,
+            busca.contexto(blocos),
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"Falha ao avaliar o diagnóstico: {e}")
     await db.adicionar_resposta(s, caso_id, "user", f"Diagnóstico final: {corpo.diagnostico}")
-    await db.encerrar_caso(s, caso_id, feedback.model_dump())
+    await db.encerrar_caso(
+        s, caso_id, feedback.model_dump(), fontes=[(f.id, n, [t.id for t in ts]) for n, f, ts in blocos if ts]
+    )
     return feedback

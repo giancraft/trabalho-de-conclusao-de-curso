@@ -5,7 +5,7 @@ import ChatWindow from './components/ChatWindow'
 import Composer from './components/Composer'
 import AuthPage from './components/AuthPage'
 import * as api from './api'
-import type { ConversaResumo, Feedback, Mensagem, Opcoes, Usuario } from './types'
+import type { ConversaResumo, Feedback, Fonte, Mensagem, Opcoes, Usuario } from './types'
 
 export default function App() {
   const [usuario, setUsuario] = useState<Usuario | null>(null)
@@ -20,6 +20,7 @@ export default function App() {
   const [casoAberto, setCasoAberto] = useState(false) // status da conversa ativa
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [feedback, setFeedback] = useState<Feedback | null>(null)
+  const [fontes, setFontes] = useState<Fonte[]>([])
   const [ocupado, setOcupado] = useState(false)
   const [digitando, setDigitando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
@@ -51,6 +52,7 @@ export default function App() {
     setCasoAberto(false)
     setMensagens([])
     setFeedback(null)
+    setFontes([])
     setErro(null)
     setMenuAberto(false)
   }
@@ -82,6 +84,7 @@ export default function App() {
       setCasoAberto(conversa.status === 'aberta')
       setMensagens(conversa.mensagens)
       setFeedback(conversa.feedback)
+      setFontes(conversa.fontes)
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Falha ao abrir a conversa.')
     }
@@ -148,6 +151,12 @@ export default function App() {
       setFeedback(await api.enviarDiagnostico(casoId, texto))
       setCasoAberto(false)
       atualizarConversas()
+      // As fontes só saem da API com o caso encerrado (o título do capítulo é o
+      // diagnóstico) — agora que encerrou, busca.
+      api
+        .carregarConversa(casoId)
+        .then((c) => setFontes(c.fontes))
+        .catch(() => {})
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Falha ao avaliar o diagnóstico.')
     } finally {
@@ -194,6 +203,7 @@ export default function App() {
           mensagens={mensagens}
           digitando={digitando}
           feedback={feedback}
+          fontes={fontes}
           erro={erro}
           temCaso={mensagens.length > 0 || digitando}
           onNovoCaso={novoCaso}

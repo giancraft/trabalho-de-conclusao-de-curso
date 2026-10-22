@@ -2,12 +2,13 @@ import { useEffect, useRef } from 'react'
 import { Stethoscope } from 'lucide-react'
 import Message, { Digitando } from './Message'
 import FeedbackCard from './FeedbackCard'
-import type { Feedback, Mensagem } from '../types'
+import type { Feedback, Fonte, Mensagem } from '../types'
 
 interface Props {
   mensagens: Mensagem[]
   digitando: boolean
   feedback: Feedback | null
+  fontes: Fonte[]
   erro: string | null
   temCaso: boolean
   onNovoCaso: () => void
@@ -17,6 +18,7 @@ export default function ChatWindow({
   mensagens,
   digitando,
   feedback,
+  fontes,
   erro,
   temCaso,
   onNovoCaso,
@@ -66,7 +68,7 @@ export default function ChatWindow({
         )}
         {feedback && (
           <>
-            <FeedbackCard fb={feedback} />
+            <FeedbackCard fb={feedback} fontes={fontes} />
             <div className="flex justify-center pb-2">
               <button
                 onClick={onNovoCaso}

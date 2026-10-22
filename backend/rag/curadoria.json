@@ -1,0 +1,15 @@
+{
+  "acidentes-escorpionicos": {"cid10": ["T63.2"], "nota": "PCDT sem a seção de CID; T63.2 = efeito tóxico do veneno de escorpião"},
+  "aneurisma-aorta-abdominal": {"cid10": ["I71.3", "I71.4"], "nota": "PCDT sem a seção de CID; I71.3/I71.4 = aneurisma de aorta abdominal roto/sem ruptura"},
+  "doenca-de-pompe": {"cid10": ["E74.0"], "nota": "PCDT sem a seção de CID; E74.0 = doença de depósito de glicogênio"},
+  "fenilcetonuria": {"cid10": ["E70.0", "E70.1"], "nota": "PCDT sem a seção de CID; E70.0/E70.1 = fenilcetonúria clássica e outras hiperfenilalaninemias"},
+  "imunodeficiencia-primaria-com-predominancia-de-defeitos-de-anticorpos-imunoglobulina-humana": {"cid10": ["D80"], "nota": "PCDT sem a seção de CID; D80 = imunodeficiência com predominância de defeitos de anticorpos"},
+  "linfoma-difuso-de-grandes-celulas-b": {"cid10": ["C83.3"], "nota": "PCDT sem a seção de CID; C83.3 = linfoma difuso de grandes células B"},
+  "pcdt-brucelose-humana": {"cid10": ["A23"], "nota": "PCDT sem a seção de CID; A23 = brucelose"},
+  "linha-de-cuidado-do-infarto-agudo-do-miocardio-e-o-protocolo-de-sindromes-coronarianas-agudas.pd": {"cid10": ["I21", "I20.0"], "nota": "linha de cuidado sem seção de CID; I21 = IAM, I20.0 = angina instável"},
+  "fratura-do-colo-do-femur-em-idosos-linha-de-cuidado": {"cid10": ["S72.0"], "nota": "sem seção de CID; S72.0 = fratura do colo do fêmur"},
+  "fratura-do-colo-do-femur-em-idosos-tratamento-diretrizes-brasileiras": {"cid10": ["S72.0"], "nota": "sem seção de CID; S72.0 = fratura do colo do fêmur"},
+  "pessoas-com-deficiencia-auditiva-linha-de-cuidado": {"cid10": ["H90"], "nota": "linha de cuidado sem seção de CID; H90 = perda de audição"},
+  "manejo-da-infeccao-pelo-hiv-em-adultos-modulo-1": {"cid10": ["B24"], "nota": "sem seção de CID; B24 = doença pelo HIV; o módulo 1 cobre diagnóstico e manejo inicial"},
+  "PMC9134146": {"descartar": true, "nota": "relato veterinário (gato FeLV-positivo); o MeSH marca Humans por ser zoonose"}
+}
