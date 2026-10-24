@@ -5,6 +5,7 @@ As rotas mantêm o prefixo /api/conversas do protótipo; no banco a entidade se 
 """
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -32,6 +33,24 @@ from rag import busca
 from rag.citacao import citacao_abnt, url_secao
 
 router = APIRouter(prefix="/api", tags=["casos"])
+
+# O logger do uvicorn já sai formatado no stdout do container: o detalhe do erro fica no
+# log, e o estudante só vê a mensagem de `_falha_ia`.
+log = logging.getLogger("uvicorn.error")
+
+
+def _falha_ia(e: Exception, acao: str) -> str:
+    """Loga o erro completo e devolve só a mensagem que o estudante pode ver.
+
+    O texto da exceção do provedor traz id da organização, limites e link de billing:
+    nada disso é para a tela.
+    """
+    log.exception("Falha da IA ao %s", acao)
+    # 402: sem créditos; 413/429: limite de tokens do provedor. `getattr` evita importar
+    # o cliente de IA aqui.
+    if getattr(e, "status_code", None) in (402, 413, 429):
+        return "O serviço de IA está no limite de uso agora. Aguarde um minuto e tente de novo."
+    return f"Não foi possível {acao} agora. Tente novamente em instantes."
 
 
 class NovoCaso(BaseModel):
@@ -196,7 +215,7 @@ async def criar_caso(
             busca.contexto(numerados),
         )
     except Exception as e:  # noqa: BLE001 — erro amigável, sem stack trace no cliente
-        raise HTTPException(502, f"Falha ao gerar o caso: {e}")
+        raise HTTPException(502, _falha_ia(e, "gerar o caso"))
 
     caso_id = await db.criar_caso(
         s,
@@ -247,7 +266,7 @@ async def conversar(
                 partes.append(chunk)
                 yield chunk
         except Exception as e:  # noqa: BLE001 — stream já aberto; erro vira texto no chat
-            yield f"\n\n*Erro ao consultar a IA: {e}*"
+            yield f"\n\n*{_falha_ia(e, 'responder')}*"
         finally:
             # Sem `await` aqui: numa desconexão este bloco roda com a task já cancelada,
             # e qualquer espera seria interrompida na hora. Ver a docstring de
@@ -284,7 +303,7 @@ async def diagnosticar(
             busca.contexto(blocos),
         )
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"Falha ao avaliar o diagnóstico: {e}")
+        raise HTTPException(502, _falha_ia(e, "avaliar o diagnóstico"))
     await db.adicionar_resposta(s, caso_id, "user", f"Diagnóstico final: {corpo.diagnostico}")
     await db.encerrar_caso(
         s, caso_id, feedback.model_dump(), fontes=[(f.id, n, [t.id for t in ts]) for n, f, ts in blocos if ts]

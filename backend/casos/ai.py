@@ -1,31 +1,49 @@
-"""Integração com a IA Generativa (Groq) — motor lógico do simulador de casos clínicos.
+"""Integração com a IA Generativa — motor lógico do simulador de casos clínicos.
 
 Três funções expostas:
 - novo_caso():           abre o caso sobre a condição sorteada no corpus (RF04)
 - responder_chat():      responde ao estudante como paciente e devolve os exames pedidos
 - avaliar_diagnostico(): feedback formativo estruturado ao fechar o diagnóstico
 
-As três chamadas estruturadas usam o modo `strict` da Groq: o schema sai dos modelos
-Pydantic abaixo e é garantido por constrained decoding, então não há um JSON escrito
-no prompt para manter em sincronia. `_extrair_json` fica como rede de segurança.
+O provedor é qualquer um compatível com a API da OpenAI (OpenRouter, Groq, DeepSeek,
+DeepInfra, Ollama...), escolhido pelo .env. Toda chamada passa por `_estruturado`: o
+schema sai dos modelos Pydantic abaixo e, onde o provedor aceita, é garantido por
+constrained decoding (`json_schema` strict); onde não aceita, vai no prompt e o Pydantic
+valida, com uma segunda tentativa.
 
-As três são `async` (AsyncGroq): chamada de LLM é espera de rede, e um worker bloqueado
+Tudo é `async` (AsyncOpenAI): chamada de LLM é espera de rede, e um worker bloqueado
 nela é um worker que não atende mais ninguém.
 """
 
 import json
+import logging
 import os
 import re
 from collections.abc import AsyncIterator
+from typing import TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-MODELO = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# Qualquer provedor compatível com a API da OpenAI serve; trocar de modelo é só mudar o
+# .env (ver .env.example). O padrão é o gpt-oss-120b pelo OpenRouter, servido pela Groq:
+# na comparação de 24/10 (vs. DeepSeek V4 Flash, Qwen3-235B e GLM-5.3 Flash) foi o mais
+# rápido e o que melhor seguiu o prompt.
+MODELO = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+# "estrito": o provedor garante o json_schema. "json": só json_object (ex.: API oficial do
+# DeepSeek) — o schema vai no prompt e o Pydantic valida.
+_MODO_JSON = os.getenv("LLM_JSON", "estrito")
+_PROVEDORES = [p.strip() for p in os.getenv("LLM_PROVIDERS", "").split(",") if p.strip()]
 
 # Turnos de conversa enviados ao modelo. O chat recorta para manter o custo por turno
 # estável (e histórico inchado dispersa o modelo); a avaliação leva quase tudo, porque
 # o que ela julga é o raciocínio ao longo de toda a investigação (RF07).
-TURNOS_CHAT = 8
+# O chat corta em blocos (cresce até 12, volta a 6) em vez de deslizar a cada mensagem:
+# entre um corte e outro o começo do prompt é idêntico e o provedor o serve do cache
+# (Groq: metade do preço e fora do limite de tokens). A ficha, que é a verdade do caso,
+# está sempre no system — o corte só tira conversa antiga.
+TURNOS_CHAT = 12
+TURNOS_CHAT_APOS_CORTE = 6
 TURNOS_AVALIACAO = 30
 
 # Grandes áreas das DCN 2014, agrupadas: Clínica Médica, demais áreas do currículo e
@@ -69,11 +87,14 @@ _SYSTEM_BASE = (
 )
 
 
+M = TypeVar("M", bound=BaseModel)
+
+
 class _Schema(BaseModel):
     """Base dos schemas trocados com o modelo.
 
-    `extra="forbid"` emite `additionalProperties: false`, exigido pelo modo `strict`
-    da Groq (junto com todos os campos obrigatórios).
+    `extra="forbid"` emite `additionalProperties: false`, exigido pelo `json_schema`
+    strict (junto com todos os campos obrigatórios).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -272,16 +293,14 @@ _SYSTEM_PEDIDOS = (
 
 
 async def _extrair_pedidos(mensagem: str) -> Pedidos:
-    resp = await _client().chat.completions.create(
-        model=MODELO,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PEDIDOS},
-            {"role": "user", "content": mensagem},
-        ],
-        response_format=_formato(Pedidos),
-        temperature=0,
+    return await _estruturado(
+        Pedidos,
+        [{"role": "system", "content": _SYSTEM_PEDIDOS}, {"role": "user", "content": mensagem}],
+        temperatura=0,
+        # Listar o que foi pedido é tarefa mecânica: raciocínio baixo, mesma lista (teste
+        # de equivalência de 24/10 nas mensagens reais do caso de TEA e do de EM).
+        raciocinio="low",
     )
-    return Pedidos.model_validate(_extrair_json(resp.choices[0].message.content))
 
 
 def _checklist(p: Pedidos) -> str:
@@ -311,15 +330,117 @@ def _formato(modelo: type[BaseModel]) -> dict:
     }
 
 
-def _janela(historico: list[dict], turnos: int) -> list[dict]:
-    """Primeira mensagem + os últimos `turnos`.
+def _openrouter() -> bool:
+    return "openrouter.ai" in _BASE_URL
+
+
+def _extra() -> dict:
+    """Preferências de roteamento do OpenRouter; vazio em qualquer outro provedor.
+
+    `require_parameters` só deixa o pedido cair em provedores que respeitam o schema, e
+    `data_collection: deny` exclui os que treinam com o que recebem (LGPD).
+    """
+    if not _openrouter():
+        return {}
+    provider: dict = {"require_parameters": True, "data_collection": "deny"}
+    if _PROVEDORES:
+        provider["order"] = _PROVEDORES
+    return {"provider": provider}
+
+
+def _parametros(modelo: type[BaseModel], mensagens: list[dict], raciocinio: str | None = None) -> dict:
+    """Argumentos de `create()` conforme o provedor aceite ou não schema estrito.
+
+    No modo "json" (ex.: API oficial do DeepSeek, que só tem `json_object`) o schema vai
+    no system prompt e quem garante o formato é a validação do Pydantic em `_estruturado`.
+    """
+    if _MODO_JSON == "json":
+        sistema, *resto = mensagens
+        schema = json.dumps(modelo.model_json_schema(), ensure_ascii=False)
+        instrucao = (
+            "\n\nResponda só com um objeto JSON válido que siga exatamente este JSON "
+            f"Schema (todos os campos, nenhum a mais):\n{schema}"
+        )
+        mensagens = [{**sistema, "content": sistema["content"] + instrucao}, *resto]
+        formato = {"type": "json_object"}
+    else:
+        formato = _formato(modelo)
+    params = {"model": MODELO, "messages": mensagens, "response_format": formato}
+    extra = _extra()
+    # Esforço de raciocínio: tokens de raciocínio são cobrados como saída (4x a entrada).
+    # O OpenRouter usa o objeto `reasoning`; Groq e OpenAI, `reasoning_effort`.
+    if raciocinio and _openrouter():
+        extra = {**extra, "reasoning": {"effort": raciocinio, "exclude": True}}
+    elif raciocinio:
+        params["reasoning_effort"] = raciocinio
+    if extra:
+        params["extra_body"] = extra
+    return params
+
+
+# Logger do uvicorn: sai formatado no stdout do container (`docker compose logs backend`).
+log = logging.getLogger("uvicorn.error")
+
+
+def _registrar_uso(nome: str, resp) -> None:
+    """Uma linha de log por chamada: tokens, cache e custo — o gasto real, medido."""
+    u = getattr(resp, "usage", None)
+    if not u:
+        return
+    cache = getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", None) or 0
+    log.info(
+        "LLM %s %s: entrada=%s (cache=%s) saída=%s custo=%s",
+        MODELO, nome, u.prompt_tokens, cache, u.completion_tokens, getattr(u, "cost", None),
+    )
+
+
+async def _estruturado(
+    modelo: type[M], mensagens: list[dict], temperatura: float, raciocinio: str | None = None
+) -> M:
+    """Chamada ao LLM que devolve `modelo` validado — o único ponto que fala com a API.
+
+    Uma segunda tentativa, sem loop, quando a resposta não valida: JSON quebrado, campo
+    faltando ou conteúdo vazio (a doc do DeepSeek avisa que o modo JSON às vezes devolve
+    vazio). O erro vai junto, para o modelo saber o que corrigir.
+    """
+    params = _parametros(modelo, mensagens, raciocinio)
+    cliente = _client()
+    erro = ""
+    for _ in range(2):
+        msgs = params["messages"]
+        if erro:
+            msgs = [*msgs, {"role": "user", "content": f"Sua resposta anterior era inválida ({erro}). Responda de novo, só com o JSON correto."}]
+        resp = await cliente.chat.completions.create(**{**params, "messages": msgs}, temperature=temperatura)
+        _registrar_uso(modelo.__name__, resp)
+        if not resp.choices:  # 200 só com `error` (doc de erros do OpenRouter): tenta de novo
+            erro = f"provedor sem resposta: {getattr(resp, 'error', None)}"
+            continue
+        try:
+            # ValidationError e JSONDecodeError são ValueError
+            return modelo.model_validate(_extrair_json(resp.choices[0].message.content or ""))
+        except ValueError as e:
+            erro = str(e)[:300]
+    raise ValueError(f"Resposta inválida do modelo após 2 tentativas: {erro}")
+
+
+def _janela(historico: list[dict], turnos: int, apos_corte: int | None = None) -> list[dict]:
+    """Primeira mensagem + no máximo os últimos `turnos`.
 
     A primeira é preservada por ser a apresentação do caso — o enunciado, não um turno
     qualquer. Sem esse corte o custo por turno cresce sem limite numa conversa longa.
+
+    Com `apos_corte`, o corte é em blocos: ao passar de `turnos`, o início pula para que
+    sobrem `apos_corte` + 1 e fica parado até o próximo estouro. Assim o prefixo do prompt
+    se repete entre chamadas e cai no cache do provedor. Sem ele, desliza a cada mensagem.
     """
-    if len(historico) <= turnos + 1:
+    primeira, resto = historico[:1], historico[1:]
+    if len(resto) <= turnos:
         return historico
-    return historico[:1] + historico[-turnos:]
+    if apos_corte is None:
+        return primeira + resto[-turnos:]
+    bloco = turnos - apos_corte
+    inicio = ((len(resto) - turnos - 1) // bloco + 1) * bloco
+    return primeira + resto[inicio:]
 
 
 def _gabarito(bruto: dict | Gabarito) -> Gabarito:
@@ -336,14 +457,18 @@ def _gabarito(bruto: dict | Gabarito) -> Gabarito:
 
 
 def _client():
-    from groq import AsyncGroq  # import preguiçoso: self-checks rodam sem a dependência
+    from openai import AsyncOpenAI  # import preguiçoso: self-checks rodam sem a dependência
 
-    chave = os.getenv("GROQ_API_KEY")
+    chave = os.getenv("LLM_API_KEY")
     if not chave:
         raise RuntimeError(
-            "GROQ_API_KEY não definida. Copie .env.example para .env e preencha a chave."
+            "LLM_API_KEY não definida. Copie .env.example para .env e preencha a chave."
         )
-    return AsyncGroq(api_key=chave)
+    # Cabeçalho opcional do quickstart do OpenRouter: identifica o app no painel Activity
+    # (sem ele aparece "Unknown"). O HTTP-Referer entra quando houver URL pública.
+    # Sem acento: cabeçalho HTTP só aceita ASCII.
+    cabecalhos = {"X-OpenRouter-Title": "Simulador de Casos Clinicos (TCC)"} if _openrouter() else {}
+    return AsyncOpenAI(base_url=_BASE_URL, api_key=chave, default_headers=cabecalhos)
 
 
 def _extrair_json(texto: str) -> dict:
@@ -438,18 +563,16 @@ para o estudante diagnosticar SEM saber a resposta.
 A abertura é só o paciente chegando e dizendo o que sente; todo o resto (história
 completa, exame físico e exames) vai para a ficha oculta, que é de onde sairão as
 respostas ao estudante. Faça a ficha completa e coerente com o diagnóstico e o nível.{_referencia(contexto)}"""
-    resp = await _client().chat.completions.create(
-        model=MODELO,
-        messages=[
+    caso = await _estruturado(
+        CasoGerado,
+        [
             {"role": "system", "content": _SYSTEM_BASE + " Responda no JSON do schema."},
             {"role": "user", "content": prompt},
         ],
-        response_format=_formato(CasoGerado),
         # Com a condição sorteada, a variedade já vem do corpus; a temperatura alta só
         # servia para o modelo não repetir sempre as mesmas condições.
-        temperature=0.6 if condicao else 0.9,
+        temperatura=0.6 if condicao else 0.9,
     )
-    caso = CasoGerado.model_validate(_extrair_json(resp.choices[0].message.content))
     # O estudante vê título e apresentação com o caso aberto: um "[1]" ali apontaria para
     # a fonte — e o título da fonte é o diagnóstico (RN06).
     return caso.model_copy(
@@ -552,19 +675,13 @@ async def responder_chat(
     pedidos = await _extrair_pedidos(mensagem)
     mensagens = [
         {"role": "system", "content": _system_tutor(especialidade, _gabarito(gabarito))},
-        *_janela(historico, TURNOS_CHAT),
+        *_janela(historico, TURNOS_CHAT, TURNOS_CHAT_APOS_CORTE),
         {"role": "user", "content": mensagem + _checklist(pedidos)},
     ]
 
     async def gerar(msgs: list[dict]) -> RespostaCaso:
-        resp = await _client().chat.completions.create(
-            model=MODELO,
-            messages=msgs,
-            response_format=_formato(RespostaCaso),
-            # baixa: aqui importa seguir as regras, não variar o texto
-            temperature=0.4,
-        )
-        return RespostaCaso.model_validate(_extrair_json(resp.choices[0].message.content))
+        # baixa: aqui importa seguir as regras, não variar o texto
+        return await _estruturado(RespostaCaso, msgs, temperatura=0.4)
 
     r = await gerar(mensagens)
     # Uma segunda chance, sem loop: se ainda assim veio vazio o que foi pedido, avisa o quê.
@@ -619,16 +736,14 @@ Avalie o raciocínio ao longo da investigação e o diagnóstico final. Julgue s
 estudante escreveu nas mensagens [ESTUDANTE]: o que o [CASO] informou não é mérito dele,
 e o que ele não descreveu não foi feito. A ficha do gabarito mostra o que havia para
 descobrir. Seja construtivo e explicativo; não atribua nota numérica.{_referencia(contexto, citar=True)}"""
-    resp = await _client().chat.completions.create(
-        model=MODELO,
-        messages=[
+    fb = await _estruturado(
+        Feedback,
+        [
             {"role": "system", "content": _SYSTEM_BASE + " Responda no JSON do schema."},
             {"role": "user", "content": prompt},
         ],
-        response_format=_formato(Feedback),
-        temperature=0.4,
+        temperatura=0.4,
     )
-    fb = Feedback.model_validate(_extrair_json(resp.choices[0].message.content))
     validos = set(map(int, _FONTE_NUMERADA.findall(contexto)))
     return fb.model_copy(
         update={
@@ -641,7 +756,7 @@ descobrir. Seja construtivo e explicativo; não atribua nota numérica.{_referen
 
 
 if __name__ == "__main__":
-    # Self-checks determinísticos, sem rede e sem a dependência `groq`.
+    # Self-checks determinísticos, sem rede e sem a dependência `openai`.
     from pydantic import ValidationError
 
     # 1. Parser tolera ruído ao redor do objeto (rede de segurança do modo strict).
@@ -665,7 +780,21 @@ if __name__ == "__main__":
     assert recortado[-1] == longo[-1], "último turno preservado"
     assert recortado[1]["content"] == "12", "corta o meio, não o fim"
 
-    # 3. Schema atende às exigências do modo strict da Groq.
+    # 2b. Janela em blocos (chat): estável entre cortes, para o prefixo cair no cache.
+    def conversa_de(n):
+        return [{"role": "assistant", "content": "apresentação"}] + [
+            {"role": "user", "content": str(i)} for i in range(n)
+        ]
+    assert _janela(conversa_de(12), 12, 6) == conversa_de(12), "até o máximo passa inteira"
+    j13 = _janela(conversa_de(13), 12, 6)
+    assert j13[0]["content"] == "apresentação" and len(j13) == 1 + 7, "ao estourar, volta perto do mínimo"
+    for n in range(13, 19):  # entre dois cortes o início não se move
+        j = _janela(conversa_de(n), 12, 6)
+        assert j[1]["content"] == "6" and j == conversa_de(n)[:1] + conversa_de(n)[7:], n
+    assert _janela(conversa_de(19), 12, 6)[1]["content"] == "12", "próximo bloco"
+    assert all(6 <= len(_janela(conversa_de(n), 12, 6)) - 1 <= 12 for n in range(13, 60))
+
+    # 3. Schema atende às exigências do json_schema strict.
     esquema = _formato(CasoGerado)["json_schema"]
     assert esquema["strict"] is True
     assert esquema["schema"]["additionalProperties"] is False
@@ -754,4 +883,78 @@ if __name__ == "__main__":
     ctx = "[1] PCDT — Asma (MS, 2026)\n\n## Diagnóstico\n\ntexto [9]\n\n[2] Diretriz — X (Y, 2025)"
     assert set(map(int, _FONTE_NUMERADA.findall(ctx))) == {1, 2}, "[9] no meio do texto não é fonte"
 
-    print("OK: parser, janela deslizante, schema strict, gabarito, bloco de referência e citações.")
+    # 8. Camada do provedor: modo do JSON, roteamento do OpenRouter e segunda tentativa.
+    import asyncio
+    from types import SimpleNamespace
+
+    msgs = [{"role": "system", "content": "sis"}, {"role": "user", "content": "oi"}]
+    _MODO_JSON = "estrito"
+    p = _parametros(Pedidos, msgs)
+    assert p["response_format"]["json_schema"]["strict"] is True and p["messages"] == msgs
+    _MODO_JSON = "json"
+    p = _parametros(Pedidos, msgs)
+    assert p["response_format"] == {"type": "json_object"}
+    assert '"perguntas"' in p["messages"][0]["content"] and msgs[0]["content"] == "sis", (
+        "schema vai no system prompt sem alterar a lista original"
+    )
+    _MODO_JSON = "estrito"
+
+    _BASE_URL, _PROVEDORES = "https://openrouter.ai/api/v1", ["deepinfra", "parasail"]
+    prov = _extra()["provider"]
+    assert prov["order"] == ["deepinfra", "parasail"] and prov["require_parameters"] is True
+    assert prov["data_collection"] == "deny"
+    _PROVEDORES = []
+    assert "order" not in _extra()["provider"]
+    _BASE_URL = "https://api.groq.com/openai/v1"
+    assert _extra() == {} and "extra_body" not in _parametros(Pedidos, msgs), (
+        "fora do OpenRouter não manda campo que o provedor não conhece"
+    )
+
+    def cliente_falso(respostas: list[str]):
+        chamadas = []
+
+        async def create(**kw):
+            chamadas.append(kw["messages"])
+            texto = respostas.pop(0)
+            if texto is None:  # 200 sem `choices`
+                return SimpleNamespace(choices=None)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=texto))])
+
+        return chamadas, SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+    ok = '{"perguntas": [], "exame_fisico": [], "exames": ["TSH"], "vago": ""}'
+    chamadas, falso = cliente_falso(["", ok])
+    cliente_real = _client
+    _client = lambda: falso  # noqa: E731
+    assert asyncio.run(_estruturado(Pedidos, msgs, 0)).exames == ["TSH"], "vazio → 2ª tentativa"
+    assert len(chamadas) == 2 and "inválida" in chamadas[1][-1]["content"], "o erro vai junto"
+    chamadas, falso = cliente_falso(['{"perguntas": []}', "nada"])
+    try:
+        asyncio.run(_estruturado(Pedidos, msgs, 0))
+        raise AssertionError("duas respostas inválidas deveriam falhar")
+    except ValueError:
+        pass
+    assert len(chamadas) == 2, "sem loop: no máximo duas chamadas"
+
+    # 200 sem `choices` (provedor aqueceu/escalou) também ganha a segunda tentativa.
+    chamadas, falso = cliente_falso([None, ok])
+    assert asyncio.run(_estruturado(Pedidos, msgs, 0)).exames == ["TSH"] and len(chamadas) == 2
+
+    # Esforço de raciocínio: objeto `reasoning` no OpenRouter, `reasoning_effort` fora dele.
+    _BASE_URL = "https://openrouter.ai/api/v1"
+    p = _parametros(Pedidos, msgs, "low")
+    assert p["extra_body"]["reasoning"] == {"effort": "low", "exclude": True} and "reasoning_effort" not in p
+    assert "reasoning" not in _parametros(Pedidos, msgs)["extra_body"], "sem o parâmetro, padrão do modelo"
+    _BASE_URL = "https://api.groq.com/openai/v1"
+    p = _parametros(Pedidos, msgs, "low")
+    assert p["reasoning_effort"] == "low" and "extra_body" not in p
+    assert "reasoning_effort" not in _parametros(Pedidos, msgs)
+
+    # Cabeçalho de identificação só vai para o OpenRouter (cliente real, sem rede).
+    os.environ.setdefault("LLM_API_KEY", "chave-de-teste")
+    _BASE_URL = "https://openrouter.ai/api/v1"
+    assert cliente_real().default_headers.get("X-OpenRouter-Title", "é").isascii(), "header só ASCII"
+    _BASE_URL = "https://api.groq.com/openai/v1"
+    assert "X-OpenRouter-Title" not in cliente_real().default_headers
+
+    print("OK: parser, janela deslizante, schema strict, gabarito, bloco de referência, citações e provedor.")

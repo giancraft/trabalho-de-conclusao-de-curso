@@ -1,7 +1,7 @@
 # Simulador Clínico — Casos com IA Generativa
 
 Aplicação web em que estudantes de Medicina investigam casos clínicos **sem conhecer o
-diagnóstico**. A IA Generativa (Groq) é o motor lógico: cria o caso oculto, responde à
+diagnóstico**. A IA Generativa é o motor lógico: cria o caso oculto, responde à
 anamnese como paciente/preceptor e avalia o diagnóstico final com feedback formativo.
 Protótipo-base do TCC *"Sistema de apoio ao estudo médico baseado em inteligência artificial"*.
 
@@ -28,15 +28,16 @@ Protótipo-base do TCC *"Sistema de apoio ao estudo médico baseado em inteligê
 | Camada | Stack | Papel |
 |---|---|---|
 | `frontend/` | React + TypeScript + Vite + Tailwind CSS | Interface de chat (sidebar, mensagens, composer, feedback) |
-| `backend/`  | FastAPI + Groq (`gpt-oss-120b`) + PostgreSQL/pgvector | Rotas da API, autenticação, persistência, prompts e streaming |
+| `backend/`  | FastAPI + LLM via API compatível com OpenAI (padrão: `gpt-oss-120b` via OpenRouter, servido pela Groq) + PostgreSQL/pgvector | Rotas da API, autenticação, persistência, prompts e streaming |
 
 O backend é organizado por domínio, tudo `async` de ponta a ponta:
 
 - `backend/main.py` — monta os routers e, em produção, serve o frontend construído.
 - `backend/models.py` — entidades (SQLModel) e schemas de leitura da API.
 - `backend/casos/ai.py` — integração com a IA: `novo_caso()`, `responder_chat()` (streaming),
-  `avaliar_diagnostico()`. As chamadas estruturadas usam o modo `strict` da Groq, com o
-  schema derivado dos modelos Pydantic — não há JSON escrito no prompt.
+  `avaliar_diagnostico()`. Toda chamada passa por `_estruturado()`, com o schema derivado
+  dos modelos Pydantic (`json_schema` strict onde o provedor aceita; senão, schema no
+  prompt + validação). Provedor e modelo vêm do `.env` — ver as receitas no `.env.example`.
 - `backend/casos/router.py` — rotas de casos (`/api/casos...`) e histórico (`/api/conversas...`).
 - `backend/auth/router.py` — registro/login/logout com bcrypt e cookie de sessão httpOnly.
 - `backend/core/db.py` — persistência em PostgreSQL (SQLModel + asyncpg).
@@ -54,7 +55,7 @@ chama de "conversa", e `resposta` é o que ela chama de "mensagem".
 ## Rodando com Docker
 
 ```bash
-cp .env.example .env    # preencha GROQ_API_KEY (https://console.groq.com/keys)
+cp .env.example .env    # preencha LLM_API_KEY (padrão: https://openrouter.ai/keys)
 docker compose up       # http://localhost:5173 (frontend) e :8000 (API)
 ```
 
