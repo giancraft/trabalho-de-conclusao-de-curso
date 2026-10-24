@@ -35,3 +35,23 @@ body,
   font-weight: 600;
   margin: 0.75rem 0 0.4rem;
 }
+.prosa table {
+  margin-bottom: 0.6rem;
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.prosa :is(th, td) {
+  border: 1px solid var(--color-zinc-200);
+  padding: 0.3rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+.prosa th {
+  background: var(--color-zinc-50);
+  font-weight: 600;
+}
+.prosa a {
+  color: var(--color-teal-700);
+  text-decoration: underline;
+}

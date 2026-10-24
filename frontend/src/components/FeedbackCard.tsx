@@ -42,20 +42,26 @@ function Secao({
   titulo,
   cor,
   itens,
+  vazio,
 }: {
   icone: LucideIcon
   titulo: string
   cor: string
   itens: string[] | string
+  /** Mensagem quando não há itens; sem ela, a seção some. */
+  vazio?: string
 }) {
-  if (!itens || itens.length === 0) return null
+  const semItens = !itens || itens.length === 0
+  if (semItens && !vazio) return null
   return (
     <div>
       <h4 className={`mb-1.5 flex items-center gap-1.5 text-sm font-semibold ${cor}`}>
         <Icone className="h-4 w-4" />
         {titulo}
       </h4>
-      {typeof itens === 'string' ? (
+      {semItens ? (
+        <p className="text-sm text-zinc-500">{vazio}</p>
+      ) : typeof itens === 'string' ? (
         <p className="text-sm leading-relaxed text-zinc-700">
           <ComCitacoes texto={itens} />
         </p>
@@ -85,15 +91,38 @@ const nomeDoTipo: Record<string, string> = {
   'Relato de caso': 'Relato de caso',
 }
 
+/** Texto com as URLs clicáveis; o ponto final da ABNT ("…/view. Acesso em") fica fora. */
+function ComLinks({ texto }: { texto: string }) {
+  return (
+    <>
+      {texto.split(/(https?:\/\/\S+?)(?=\.?(?:\s|$))/).map((parte, i) =>
+        i % 2 ? (
+          <a
+            key={i}
+            href={parte}
+            target="_blank"
+            rel="noreferrer"
+            className="text-teal-700 underline hover:text-teal-600"
+          >
+            {parte}
+          </a>
+        ) : (
+          parte
+        ),
+      )}
+    </>
+  )
+}
+
 /** Citação ABNT com o trecho que a NBR 6023 manda destacar em negrito. */
 function Citacao({ citacao, destaque }: { citacao: string; destaque: string }) {
   const i = citacao.indexOf(destaque)
-  if (!destaque || i < 0) return <>{citacao}</>
+  if (!destaque || i < 0) return <ComLinks texto={citacao} />
   return (
     <>
-      {citacao.slice(0, i)}
+      <ComLinks texto={citacao.slice(0, i)} />
       <strong>{destaque}</strong>
-      {citacao.slice(i + destaque.length)}
+      <ComLinks texto={citacao.slice(i + destaque.length)} />
     </>
   )
 }
@@ -173,12 +202,14 @@ export default function FeedbackCard({ fb, fontes }: { fb: Feedback; fontes: Fon
           titulo="Inconsistências"
           cor="text-red-700"
           itens={fb.inconsistencias}
+          vazio="Nenhuma inconsistência."
         />
         <Secao
           icone={CircleHelp}
-          titulo="Hipóteses não consideradas"
+          titulo="O que faltou na investigação"
           cor="text-amber-700"
           itens={fb.hipoteses_nao_consideradas}
+          vazio="Nada a apontar: sua investigação cobriu o essencial."
         />
         <Secao
           icone={BookOpen}

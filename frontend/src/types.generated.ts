@@ -249,17 +249,17 @@ export interface components {
             diagnostico_correto: string;
             /**
              * Acertos
-             * @description o que o estudante fez/identificou corretamente na investigação e conclusão
+             * @description o que o estudante fez ou concluiu corretamente, só o que está nas mensagens [ESTUDANTE]; o que o caso já entregou não conta como mérito
              */
             acertos: string[];
             /**
              * Inconsistencias
-             * @description erros ou afirmações incorretas, cada um com a correção
+             * @description erros ou afirmações incorretas do estudante, cada um com a correção; lista vazia se não houver
              */
             inconsistencias: string[];
             /**
              * Hipoteses Nao Consideradas
-             * @description diferenciais ou achados relevantes que faltaram
+             * @description lacunas na conduta do estudante: perguntas de anamnese, manobras de exame físico ou exames que faltaram para fechar o diagnóstico, e achados que ele não valorizou. Cada item é uma ação (ex.: 'Não perguntou sobre...'), nunca só o nome de uma doença. Lista vazia se a investigação cobriu o essencial
              */
             hipoteses_nao_consideradas: string[];
             /**

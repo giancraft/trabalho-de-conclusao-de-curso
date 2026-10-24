@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Stethoscope } from 'lucide-react'
 import type { Mensagem } from '../types'
 
@@ -18,7 +19,7 @@ export default function Message({ msg }: { msg: Mensagem }) {
         <Stethoscope className="h-4 w-4 text-zinc-600" />
       </div>
       <div className="prosa min-w-0 pt-1 text-sm leading-relaxed text-zinc-800">
-        <ReactMarkdown>{msg.content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
       </div>
     </div>
   )
