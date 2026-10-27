@@ -4,16 +4,35 @@ import Sidebar from './components/Sidebar'
 import ChatWindow from './components/ChatWindow'
 import Composer from './components/Composer'
 import AuthPage from './components/AuthPage'
+import SeletorTemas from './components/SeletorTemas'
+import ResumoSimulado from './components/ResumoSimulado'
 import * as api from './api'
-import type { ConversaResumo, Feedback, Fonte, Mensagem, Opcoes, RespostaFinal, Usuario } from './types'
+import type {
+  CasoAberto,
+  ConversaResumo,
+  Feedback,
+  Fonte,
+  Mensagem,
+  Opcoes,
+  RespostaFinal,
+  Simulado,
+  Usuario,
+} from './types'
+
+/** Onde o caso ativo está no simulado. */
+interface Progresso {
+  id: string
+  ordem: number
+  total: number
+}
 
 export default function App() {
   const [usuario, setUsuario] = useState<Usuario | null>(null)
   const [bootPronto, setBootPronto] = useState(false)
 
   const [opcoes, setOpcoes] = useState<Opcoes | null>(null)
-  const [especialidade, setEspecialidade] = useState('Cardiologia')
-  const [ciclo, setCiclo] = useState('clínico')
+  const [progresso, setProgresso] = useState<Progresso | null>(null)
+  const [resumo, setResumo] = useState<Simulado | null>(null) // no fim do simulado
 
   const [conversas, setConversas] = useState<ConversaResumo[]>([])
   const [casoId, setCasoId] = useState<string | null>(null)
@@ -37,12 +56,16 @@ export default function App() {
 
   useEffect(() => {
     if (!usuario) return
+    atualizarOpcoes()
+    atualizarConversas()
+  }, [usuario])
+
+  function atualizarOpcoes() {
     api
       .buscarOpcoes()
       .then(setOpcoes)
       .catch(() => setErro('Backend indisponível. Inicie a API (uvicorn) e recarregue.'))
-    atualizarConversas()
-  }, [usuario])
+  }
 
   function atualizarConversas() {
     api.listarConversas().then(setConversas).catch(() => {})
@@ -56,17 +79,25 @@ export default function App() {
     setFontes([])
     setErro(null)
     setMenuAberto(false)
+    setProgresso(null)
+    setResumo(null)
   }
 
-  async function novoCaso() {
-    limparChat()
+  /** Abre o caso que a API acabou de gerar. A tela atual (seletor ou feedback do caso
+   * anterior) só sai quando ele chega: se a geração falhar, o erro aparece onde se está. */
+  async function iniciarCaso(pedido: () => Promise<CasoAberto>) {
     setOcupado(true)
+    setErro(null)
     setDigitando(true)
     try {
-      const caso = await api.criarCaso(especialidade, ciclo)
+      const caso = await pedido()
       setCasoId(caso.caso_id)
       setCasoCiclo(caso.ciclo)
       setCasoAberto(true)
+      setFeedback(null)
+      setFontes([])
+      setResumo(null)
+      setProgresso({ id: caso.simulado_id, ordem: caso.ordem, total: caso.total })
       setMensagens([{ role: 'assistant', content: caso.apresentacao }])
       atualizarConversas()
     } catch (e) {
@@ -75,6 +106,19 @@ export default function App() {
       setDigitando(false)
       setOcupado(false)
     }
+  }
+
+  function gerarSimulado(selecao: string[], ciclo: string, quantidade: number) {
+    iniciarCaso(() => api.criarSimulado(selecao, ciclo, quantidade))
+  }
+
+  function proximoCaso() {
+    if (progresso) iniciarCaso(() => api.proximoCaso(progresso.id))
+  }
+
+  /** Último caso do simulado encerrado: carrega o resumo. */
+  function talvezResumo(p: Progresso | null) {
+    if (p && p.ordem >= p.total) api.lerSimulado(p.id).then(setResumo).catch(() => {})
   }
 
   async function abrirConversa(id: string) {
@@ -88,6 +132,11 @@ export default function App() {
       setMensagens(conversa.mensagens)
       setFeedback(conversa.feedback)
       setFontes(conversa.fontes)
+      const p = conversa.simulado_id
+        ? { id: conversa.simulado_id, ordem: conversa.ordem ?? 1, total: conversa.total ?? 1 }
+        : null
+      setProgresso(p)
+      if (conversa.status === 'encerrada') talvezResumo(p)
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Falha ao abrir a conversa.')
     }
@@ -151,6 +200,8 @@ export default function App() {
       setFeedback(await api.enviarDiagnostico(casoId, resposta))
       setCasoAberto(false)
       atualizarConversas()
+      atualizarOpcoes() // "respondidos" da árvore
+      talvezResumo(progresso)
       // As fontes só saem da API com o caso encerrado (o título do capítulo é o
       // diagnóstico) — agora que encerrou, busca.
       api
@@ -171,18 +222,13 @@ export default function App() {
   return (
     <div className="flex h-full bg-zinc-50 font-sans">
       <Sidebar
-        opcoes={opcoes}
-        especialidade={especialidade}
-        ciclo={ciclo}
         ocupado={ocupado}
         aberta={menuAberto}
         usuario={usuario}
         conversas={conversas}
         conversaAtivaId={casoId}
         onFechar={() => setMenuAberto(false)}
-        onEspecialidade={setEspecialidade}
-        onCiclo={setCiclo}
-        onNovoCaso={novoCaso}
+        onNovoSimulado={limparChat}
         onAbrirConversa={abrirConversa}
         onApagarConversa={apagarConversa}
         onLogout={sair}
@@ -199,6 +245,11 @@ export default function App() {
           <Stethoscope className="h-4 w-4 text-teal-600" />
           <span className="text-sm font-semibold text-zinc-800">Simulador Clínico</span>
         </header>
+        {casoId && progresso && progresso.total > 1 && (
+          <div className="border-b border-zinc-200 bg-white px-4 py-2 text-center text-xs text-zinc-500">
+            Simulado · caso {progresso.ordem} de {progresso.total}
+          </div>
+        )}
         <ChatWindow
           mensagens={mensagens}
           digitando={digitando}
@@ -206,7 +257,52 @@ export default function App() {
           fontes={fontes}
           erro={erro}
           temCaso={mensagens.length > 0 || digitando}
-          onNovoCaso={novoCaso}
+          inicio={
+            <>
+              {erro && (
+                <div className="mx-auto mt-6 max-w-3xl px-4">
+                  <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {erro}
+                  </p>
+                </div>
+              )}
+              <SeletorTemas
+                arvore={opcoes?.arvore ?? []}
+                ciclos={opcoes?.ciclos ?? []}
+                ocupado={ocupado}
+                onGerar={gerarSimulado}
+              />
+            </>
+          }
+          aposFeedback={
+            <div className="space-y-4 pb-2">
+              {progresso && progresso.ordem < progresso.total ? (
+                <div className="flex justify-center">
+                  <button
+                    onClick={proximoCaso}
+                    disabled={ocupado}
+                    className="rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white
+                               transition-colors hover:bg-teal-500 disabled:opacity-50"
+                  >
+                    Próximo caso ({progresso.ordem + 1}/{progresso.total})
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {resumo && resumo.total > 1 && <ResumoSimulado simulado={resumo} onAbrir={abrirConversa} />}
+                  <div className="flex justify-center">
+                    <button
+                      onClick={limparChat}
+                      className="rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white
+                                 transition-colors hover:bg-teal-500"
+                    >
+                      Novo simulado
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          }
         />
         {casoId && casoAberto && !feedback && (
           <Composer

@@ -11,12 +11,12 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel, delete, select
 
 from core import config
-from models import CasoClinico, CasoFonte, FonteReferencia, Resposta, Sessao, Usuario, agora
+from models import CasoClinico, CasoFonte, FonteReferencia, Resposta, Sessao, Simulado, Usuario, agora
 
 engine = create_async_engine(config.DATABASE_URL, pool_pre_ping=True)
 
@@ -102,6 +102,8 @@ async def criar_caso(
     ciclo: str,
     gabarito: dict,
     fontes: list[UsoFonte] = (),
+    simulado_id: str | None = None,
+    ordem: int | None = None,
 ) -> str:
     """Cria o caso e registra as fontes da geração na mesma transação (RF14)."""
     caso = CasoClinico(
@@ -111,12 +113,44 @@ async def criar_caso(
         especialidade=especialidade,
         ciclo=ciclo,
         gabarito=gabarito,
+        simulado_id=simulado_id,
+        ordem=ordem,
     )
     s.add(caso)
     await s.flush()  # o caso precisa existir antes dos vínculos (FK)
     s.add_all(_usos(caso.id, "caso", fontes))
     await s.commit()
     return caso.id
+
+
+async def criar_simulado(s: AsyncSession, usuario_id: int, ciclo: str, selecao: list[str], fila: list[int]) -> str:
+    simulado = Simulado(id=uuid.uuid4().hex, usuario_id=usuario_id, ciclo=ciclo, selecao=selecao, fila=fila)
+    s.add(simulado)
+    await s.commit()
+    return simulado.id
+
+
+async def carregar_simulado(
+    s: AsyncSession, simulado_id: str, usuario_id: int
+) -> tuple[Simulado, list[CasoClinico]] | None:
+    """Simulado do usuário com seus casos em ordem; None se não for dele (isolamento)."""
+    simulado = (
+        await s.execute(select(Simulado).where(Simulado.id == simulado_id, Simulado.usuario_id == usuario_id))
+    ).scalar_one_or_none()
+    if simulado is None:
+        return None
+    casos = (
+        await s.execute(select(CasoClinico).where(CasoClinico.simulado_id == simulado_id).order_by(CasoClinico.ordem))
+    ).scalars()
+    return simulado, list(casos)
+
+
+async def totais_dos_simulados(s: AsyncSession, usuario_id: int) -> dict[str, int]:
+    """{simulado_id: número de casos da fila}, para o "2/5" da lista de conversas."""
+    linhas = await s.execute(
+        select(Simulado.id, func.cardinality(Simulado.fila)).where(Simulado.usuario_id == usuario_id)
+    )
+    return dict(linhas.all())
 
 
 async def fontes_do_caso(
@@ -293,6 +327,7 @@ if __name__ == "__main__":
             caso, _ = await carregar_caso(s, cid, uid)
             assert caso.status == "encerrada" and caso.feedback == {"acertou": True}
 
+
             assert isinstance(caso.criada_em, datetime) and caso.criada_em.tzinfo, (
                 "TIMESTAMPTZ: a data volta com offset, não ingênua"
             )
@@ -304,6 +339,15 @@ if __name__ == "__main__":
             assert await apagar_caso(s, cid, uid) and await listar_casos(s, uid) == []
             assert not await apagar_caso(s, cid, uid), "apagar de novo retorna False"
 
-        print("OK: CRUD de usuários, sessões, casos clínicos e respostas passa.")
+            # Simulado: fila de fontes; os casos entram com a posição e voltam em ordem.
+            sid = await criar_simulado(s, uid, "clínico", ["t:pcdt-ic"], [fonte.id, fonte.id, fonte.id])
+            for ordem in (2, 1):
+                await criar_caso(s, uid, f"caso {ordem}", "Cardiologia", "clínico", {}, simulado_id=sid, ordem=ordem)
+            simulado, casos_sim = await carregar_simulado(s, sid, uid)
+            assert simulado.fila == [fonte.id] * 3 and [c.titulo for c in casos_sim] == ["caso 1", "caso 2"]
+            assert await carregar_simulado(s, sid, usuario_id=999) is None, "não vaza simulado de outro usuário"
+            assert await totais_dos_simulados(s, uid) == {sid: 3}
+
+        print("OK: CRUD de usuários, sessões, casos clínicos, simulados e respostas passa.")
 
     asyncio.run(principal())

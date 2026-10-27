@@ -1,8 +1,8 @@
 """Recuperação no corpus — a superfície que `casos/router.py` consome (RF04).
 
-- sortear_fonte():   a condição sai do corpus (RN01): PCDT, manual do MS ou relato, sorteados
-                     pelo peso (relevância) e sem repetir para o mesmo estudante até
-                     esgotar a área
+- sortear_fonte():   a condição sai do corpus (RN01), dos temas que o estudante marcou:
+                     PCDT, manual do MS ou relato, pelo peso (relevância), com o já visto
+                     pesando menos — sortear_fila() monta um simulado
 - fontes_de_apoio(): PCDT/diretriz ligados à condição por conceito MeSH exato
                      (`rag/apoio.py`) — é o que puxa a diretriz para junto do relato
 - material():        os trechos de uma fonte para uma etapa (geração ou feedback)
@@ -17,12 +17,13 @@
 import random
 from functools import cache
 
-from sqlalchemy import func, text
+from sqlalchemy import case, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from models import CasoClinico, CasoFonte, FonteReferencia, Trecho
 from rag.embeddings import embedar
+from rag.temas import resolver
 
 # Seções do PCDT que alimentam cada etapa: a geração precisa do quadro clínico, o
 # feedback dos critérios diagnósticos, do diferencial e da conduta do SUS.
@@ -54,16 +55,22 @@ APOIO = 2
 
 
 async def sortear_fonte(
-    s: AsyncSession, especialidade: str, usuario_id: int | None = None, relato: bool | None = None
+    s: AsyncSession,
+    selecao: list[str],
+    usuario_id: int | None = None,
+    relato: bool | None = None,
+    ja: list[int] = (),
 ) -> FonteReferencia | None:
-    """Fonte sorteável da especialidade, com chance proporcional ao `peso`.
+    """Fonte sorteável dos nós marcados (`rag/temas.py`), com chance proporcional à
+    importância.
 
-    O ciclo do caso não entra aqui: ele muda o que se cobra, não a doença. Ordena primeiro
-    pelo número de vezes que este estudante já recebeu a fonte — a área inteira passa
-    antes de qualquer repetição — e, entre as menos vistas, sorteia pelo peso: a chave
-    -ln(1 - u)/peso (Efraimidis–Spirakis) dá a cada fonte chance proporcional ao peso, em
-    uma linha de SQL. `relato` escolhe o grupo (padrão: relato em PROB_RELATO dos casos);
-    grupo vazio cai para a área inteira.
+    O peso é a relevância (internações no SIH/SUS + tema de residência, rag/ingestao.py),
+    e repetir não é proibido — a doença importante deve voltar. Só pesa menos o que o
+    estudante já viu: peso efetivo = peso / (1 + vezes vista), contando os casos dele e
+    as fontes `ja` sorteadas para o mesmo simulado. A chave -ln(1 - u)/peso
+    (Efraimidis–Spirakis) dá a cada fonte chance proporcional ao peso, em uma linha de
+    SQL. `relato` escolhe o grupo (padrão: relato em PROB_RELATO dos casos); grupo vazio
+    cai para a seleção inteira. O ciclo não entra: muda o que se cobra, não a doença.
     """
     if relato is None:
         relato = random.random() < PROB_RELATO
@@ -74,22 +81,31 @@ async def sortear_fonte(
         .group_by(CasoFonte.fonte_id)
         .subquery()
     )
-    vezes = func.coalesce(vistos.c.n, 0)
-    da_area = (
+    vezes = func.coalesce(vistos.c.n, 0) + sum(case((FonteReferencia.id == i, 1), else_=0) for i in ja)
+    # 1 - random() ∈ (0, 1]: ln(0) daria erro no Postgres.
+    base = (
         select(FonteReferencia)
         .outerjoin(vistos, vistos.c.fonte_id == FonteReferencia.id)
-        .where(FonteReferencia.sorteavel, FonteReferencia.especialidade == especialidade)
+        .where(FonteReferencia.sorteavel, resolver(selecao))
+        .order_by(-func.ln(1 - func.random()) * (1 + vezes) / FonteReferencia.peso)
+        .limit(1)
     )
-    # 1 - random() ∈ (0, 1]: ln(0) daria erro no Postgres.
-    base = da_area.order_by(vezes, -func.ln(1 - func.random()) / FonteReferencia.peso).limit(1)
-    # O grupo só vale entre as menos vistas da área: com o único relato já visto, sai um
-    # PCDT ainda inédito em vez de repetir o relato.
-    menos_vistas = da_area.with_only_columns(func.min(vezes)).scalar_subquery()
     eh_relato = FonteReferencia.tipo == "Relato de caso"
-    grupo = (eh_relato if relato else ~eh_relato) & (vezes == menos_vistas)
-    return (await s.execute(base.where(grupo))).scalar_one_or_none() or (
+    return (await s.execute(base.where(eh_relato if relato else ~eh_relato))).scalar_one_or_none() or (
         await s.execute(base)
     ).scalar_one_or_none()
+
+
+async def sortear_fila(
+    s: AsyncSession, selecao: list[str], n: int, usuario_id: int | None = None
+) -> list[FonteReferencia]:
+    """n sorteios com reposição: a fila de um simulado. Seleção vazia → []."""
+    fila = []
+    for _ in range(n):
+        if not (fonte := await sortear_fonte(s, selecao, usuario_id, ja=[f.id for f in fila])):
+            break
+        fila.append(fonte)
+    return fila
 
 
 @cache
@@ -232,13 +248,14 @@ if __name__ == "__main__":
             return v
 
         async with sessao_descartavel() as s:
-            comum = dict(orgao="MS", url="u", licenca="l", publicado_em=None, cid10=[])
+            comum = dict(orgao="MS", url="u", licenca="l", publicado_em=None, cid10=[], grande_area="Clínica Médica")
             iam = FonteReferencia(chave="iam", tipo="PCDT", identificador="P1", titulo="Infarto agudo do miocárdio",
-                                  especialidade="Cardiologia", dificuldade="básico", peso=9, **comum)
+                                  especialidade="Cardiologia", dificuldade="básico", peso=9, tema="iam", **comum)
             fa = FonteReferencia(chave="fa", tipo="PCDT", identificador="P2", titulo="Fibrilação atrial",
-                                 especialidade="Cardiologia", dificuldade="intermediário", peso=1, **comum)
+                                 especialidade="Cardiologia", dificuldade="intermediário", peso=1, tema="fa", **comum)
             relato = FonteReferencia(chave="PMC1", tipo="Relato de caso", identificador="PMCID PMC1",
-                                     titulo="Kounis syndrome", especialidade="Cardiologia", dificuldade="avançado", **comum)
+                                     titulo="Kounis syndrome", especialidade="Cardiologia", dificuldade="avançado",
+                                     tema="iam", **comum)
             diretriz = FonteReferencia(chave="PMC2", tipo="Diretriz", identificador="PMCID PMC2", sorteavel=False,
                                        titulo="Diretriz SBC de síndromes coronarianas", especialidade="Cardiologia",
                                        dificuldade="", **comum)
@@ -261,31 +278,42 @@ if __name__ == "__main__":
             ])
             await s.commit()
 
-            # Sorteio: só sorteáveis da área; apoio nunca sai; o grupo (relato ou não) manda.
+            # Sorteio: só sorteáveis dos nós marcados; apoio nunca sai; o grupo (relato ou
+            # não) manda, e grupo vazio cai para a seleção inteira.
+            cardio = ["e:Clínica Médica|Cardiologia"]
             for _ in range(5):
-                assert (await sortear_fonte(s, "Cardiologia", relato=True)).chave == "PMC1"
-                assert (await sortear_fonte(s, "Cardiologia", relato=False)).chave in {"iam", "fa"}
-            assert await sortear_fonte(s, "Dermatologia") is None, "revisão não é sorteável"
-            assert await sortear_fonte(s, "Pediatria") is None, "sem corpus → None"
+                assert (await sortear_fonte(s, cardio, relato=True)).chave == "PMC1"
+                assert (await sortear_fonte(s, cardio, relato=False)).chave in {"iam", "fa"}
+                assert (await sortear_fonte(s, ["t:fa"], relato=True)).chave == "fa", "tema sem relato"
+                assert (await sortear_fonte(s, ["t:fa", "a:Pediatria"])).chave == "fa", "OR entre os nós"
+            assert await sortear_fonte(s, ["e:Clínica Médica|Dermatologia"]) is None, "revisão não é sorteável"
+            assert await sortear_fonte(s, ["a:Pediatria"]) is None, "sem corpus → None"
+            assert await sortear_fonte(s, []) is None, "nada marcado → nada"
+
+            async def contar_iam(n: int = 400, **kw) -> int:
+                return sum([(await sortear_fonte(s, cardio, relato=False, **kw)).chave == "iam" for _ in range(n)])
+
             # Peso: IAM (9) sai ~9x mais que FA (1). Em 400 sorteios, esperado ~360 x 40.
-            n_iam = sum([(await sortear_fonte(s, "Cardiologia", relato=False)).chave == "iam" for _ in range(400)])
+            n_iam = await contar_iam()
             assert 320 < n_iam < 395, n_iam
 
-            # Sem repetição: com as 3 sorteáveis da área já vistas uma vez cada, exceto
-            # uma, o próximo sorteio (balde vazio → área inteira) traz a que falta.
+            # Repetição permitida, com desconto: visto 1 vez, o IAM vale 9/2 = 4,5 contra 1
+            # (~82%); com mais 8 no mesmo simulado, 9/10 = 0,9 contra 1 (~47%).
             from models import CasoClinico, CasoFonte
             uid = (await s.execute(select(Usuario.id))).scalar_one()
-            for i, f in enumerate([iam, relato]):
-                s.add(CasoClinico(id=f"c{i}", usuario_id=uid, titulo="t", especialidade="Cardiologia",
-                                  ciclo="básico", gabarito={}))
-                await s.flush()
-                s.add(CasoFonte(caso_id=f"c{i}", fonte_id=f.id, etapa="caso", numero=1, trechos=[]))
+            s.add(CasoClinico(id="c0", usuario_id=uid, titulo="t", especialidade="Cardiologia",
+                              ciclo="básico", gabarito={}))
+            await s.flush()
+            s.add(CasoFonte(caso_id="c0", fonte_id=iam.id, etapa="caso", numero=1, trechos=[]))
             await s.commit()
-            for _ in range(5):
-                assert (await sortear_fonte(s, "Cardiologia", uid, relato=False)).chave == "fa", "a não vista vem antes"
-                assert (await sortear_fonte(s, "Cardiologia", uid, relato=True)).chave == "fa", (
-                    "relato já visto: a não vista de outro grupo ganha"
-                )
+            n_visto = await contar_iam(usuario_id=uid)
+            assert 280 < n_visto < 370, n_visto
+            n_fila = await contar_iam(usuario_id=uid, ja=[iam.id] * 8)
+            assert 140 < n_fila < 240, n_fila
+
+            # Fila do simulado: com reposição — tema de uma fonte só ainda dá n casos.
+            assert [f.chave for f in await sortear_fila(s, ["t:fa"], 3, uid)] == ["fa", "fa", "fa"]
+            assert await sortear_fila(s, [], 3, uid) == []
 
             # Seções do PCDT e material por tipo de fonte.
             ts = await trechos_da_fonte(s, iam.id, SECOES_CASO)
@@ -334,6 +362,6 @@ if __name__ == "__main__":
             assert await fontes_de_apoio(s, fa, ligacoes) == [], "sem ligação, sem apoio"
             achados = await buscar(s, "qualquer", k=2)
             assert [(t.texto, f.chave) for t, f in achados] == [("dr", "PMC2"), ("h1", "iam")]
-        print("OK: sorteio ponderado sem repetição, apoio por autoridade, material por tipo e ciclo, contexto e kNN.")
+        print("OK: sorteio por tema ponderado com desconto do já visto, fila com reposição, apoio por autoridade, material por tipo e ciclo, contexto e kNN.")
 
     asyncio.run(consultar(sys.argv[1]) if len(sys.argv) > 1 else selfcheck())

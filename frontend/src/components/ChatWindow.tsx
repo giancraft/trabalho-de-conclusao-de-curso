@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react'
-import { Stethoscope } from 'lucide-react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import Message, { Digitando } from './Message'
 import FeedbackCard from './FeedbackCard'
 import type { Feedback, Fonte, Mensagem } from '../types'
@@ -11,7 +10,8 @@ interface Props {
   fontes: Fonte[]
   erro: string | null
   temCaso: boolean
-  onNovoCaso: () => void
+  inicio: ReactNode // sem caso ativo: o seletor de temas
+  aposFeedback: ReactNode // próximo caso do simulado, ou o resumo
 }
 
 export default function ChatWindow({
@@ -21,7 +21,8 @@ export default function ChatWindow({
   fontes,
   erro,
   temCaso,
-  onNovoCaso,
+  inicio,
+  aposFeedback,
 }: Props) {
   const fimRef = useRef<HTMLDivElement>(null)
 
@@ -30,28 +31,7 @@ export default function ChatWindow({
   }, [mensagens, digitando, feedback])
 
   if (!temCaso) {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-        <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-600/10">
-          <Stethoscope className="h-7 w-7 text-teal-600" />
-        </div>
-        <h2 className="mb-2 text-xl font-semibold text-zinc-900">
-          Bem-vindo ao Simulador Clínico
-        </h2>
-        <p className="mb-6 max-w-md text-sm leading-relaxed text-zinc-500">
-          Escolha uma especialidade e o seu ciclo do curso na barra lateral e inicie um novo
-          caso. Você conduzirá a investigação — anamnese, exame físico, exames e conduta — sem
-          conhecer o diagnóstico, e receberá feedback ao final, no nível do seu ciclo.
-        </p>
-        <button
-          onClick={onNovoCaso}
-          className="rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white
-                     transition-colors hover:bg-teal-500"
-        >
-          Iniciar um caso
-        </button>
-      </div>
-    )
+    return <div className="flex-1 overflow-y-auto">{inicio}</div>
   }
 
   return (
@@ -69,15 +49,7 @@ export default function ChatWindow({
         {feedback && (
           <>
             <FeedbackCard fb={feedback} fontes={fontes} />
-            <div className="flex justify-center pb-2">
-              <button
-                onClick={onNovoCaso}
-                className="rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white
-                           transition-colors hover:bg-teal-500"
-              >
-                Iniciar novo caso
-              </button>
-            </div>
+            {aposFeedback}
           </>
         )}
         <div ref={fimRef} />

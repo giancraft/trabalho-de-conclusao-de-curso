@@ -77,6 +77,21 @@ ESPECIALIDADES = [
     "Otorrinolaringologia",
 ]
 
+# Grandes áreas das provas de residência, no topo da árvore de temas (rag/temas.py).
+# Ginecologia e Obstetrícia se divide por fonte, pela CID ou pelo MeSH; Preventiva fica
+# de fora — não gera caso diagnóstico.
+GRANDES_AREAS = ["Clínica Médica", "Cirurgia", "Ginecologia", "Obstetrícia", "Pediatria"]
+GRANDE_AREA = {
+    **{e: "Clínica Médica" for e in ESPECIALIDADES[:12]},
+    "Psiquiatria": "Clínica Médica",
+    "Medicina de Emergência": "Clínica Médica",
+    "Medicina de Família e Comunidade": "Clínica Médica",
+    "Pediatria": "Pediatria",
+    "Ginecologia e Obstetrícia": "Ginecologia",
+    **{e: "Cirurgia" for e in ESPECIALIDADES[ESPECIALIDADES.index("Ortopedia e Traumatologia"):]},
+    "Cirurgia Geral": "Cirurgia",
+}
+
 # Ciclos do curso: o ciclo não escolhe a doença (rag/busca.py sorteia pela relevância),
 # escolhe o que se cobra na entrega final e no feedback.
 CICLOS = ["básico", "clínico", "internato"]

@@ -5,6 +5,7 @@ import type {
   Feedback,
   Opcoes,
   RespostaFinal,
+  Simulado,
   Usuario,
 } from './types'
 
@@ -18,8 +19,9 @@ async function checar(res: Response): Promise<Response> {
 
 const json = { 'Content-Type': 'application/json' }
 
+/** Árvore de temas (com o progresso do estudante em cada nó) e os ciclos. */
 export async function buscarOpcoes(): Promise<Opcoes> {
-  return (await checar(await fetch('/api/especialidades'))).json()
+  return (await checar(await fetch('/api/temas'))).json()
 }
 
 // --- autenticação (cookie httpOnly gerenciado pelo navegador) ---
@@ -68,16 +70,27 @@ export async function apagarConversa(id: string): Promise<void> {
   await checar(await fetch(`/api/conversas/${id}`, { method: 'DELETE' }))
 }
 
-export async function criarCaso(
-  especialidade: string,
+// --- simulados: N casos sorteados dos temas marcados, gerados um a um ---
+
+export async function criarSimulado(
+  selecao: string[],
   ciclo: string,
+  quantidade: number,
 ): Promise<CasoAberto> {
-  const res = await fetch('/api/casos', {
+  const res = await fetch('/api/simulados', {
     method: 'POST',
     headers: json,
-    body: JSON.stringify({ especialidade, ciclo }),
+    body: JSON.stringify({ selecao, ciclo, quantidade }),
   })
   return (await checar(res)).json()
+}
+
+export async function proximoCaso(simuladoId: string): Promise<CasoAberto> {
+  return (await checar(await fetch(`/api/simulados/${simuladoId}/proximo`, { method: 'POST' }))).json()
+}
+
+export async function lerSimulado(simuladoId: string): Promise<Simulado> {
+  return (await checar(await fetch(`/api/simulados/${simuladoId}`))).json()
 }
 
 /** Envia uma mensagem e consome a resposta em streaming, chunk a chunk. */

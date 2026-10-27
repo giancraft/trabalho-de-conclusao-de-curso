@@ -72,15 +72,19 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/especialidades": {
+    "/api/temas": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Especialidades */
-        get: operations["especialidades_api_especialidades_get"];
+        /**
+         * Arvore De Temas
+         * @description Árvore grande área → especialidade → tema, com o que há para sortear em cada nó e
+         *     quantos casos o estudante já encerrou nele (pela condição sorteada, a fonte [1]).
+         */
+        get: operations["arvore_de_temas_api_temas_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -124,7 +128,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/casos": {
+    "/api/simulados": {
         parameters: {
             query?: never;
             header?: never;
@@ -133,8 +137,51 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Criar Caso */
-        post: operations["criar_caso_api_casos_post"];
+        /**
+         * Criar Simulado
+         * @description Sorteia a fila de N casos dos temas marcados e já abre o primeiro.
+         *
+         *     Os outros são gerados um a um (`/proximo`): gerar todos agora estouraria o limite de
+         *     tokens/min do provedor e faria o estudante esperar por casos que talvez nem abra.
+         */
+        post: operations["criar_simulado_api_simulados_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/simulados/{simulado_id}/proximo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Proximo Caso */
+        post: operations["proximo_caso_api_simulados__simulado_id__proximo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/simulados/{simulado_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ler Simulado
+         * @description Progresso e resumo. O diagnóstico só aparece nos casos encerrados (RN06).
+         */
+        get: operations["ler_simulado_api_simulados__simulado_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -189,6 +236,12 @@ export interface components {
             ciclo: string;
             /** Apresentacao */
             apresentacao: string;
+            /** Simulado Id */
+            simulado_id: string;
+            /** Ordem */
+            ordem: number;
+            /** Total */
+            total: number;
         };
         /**
          * CasoLeitura
@@ -217,6 +270,12 @@ export interface components {
             feedback: components["schemas"]["FeedbackLeitura"] | null;
             /** Fontes */
             fontes: components["schemas"]["FonteLeitura"][];
+            /** Simulado Id */
+            simulado_id?: string | null;
+            /** Ordem */
+            ordem?: number | null;
+            /** Total */
+            total?: number | null;
         };
         /** CasoResumo */
         CasoResumo: {
@@ -236,6 +295,10 @@ export interface components {
              * Format: date-time
              */
             criada_em: string;
+            /** Ordem */
+            ordem?: number | null;
+            /** Total */
+            total?: number | null;
         };
         /**
          * FeedbackLeitura
@@ -312,6 +375,24 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** ItemSimulado */
+        ItemSimulado: {
+            /** Caso Id */
+            caso_id: string;
+            /** Ordem */
+            ordem: number;
+            /** Titulo */
+            titulo: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "aberta" | "encerrada";
+            /** Acertou */
+            acertou: boolean | null;
+            /** Diagnostico Correto */
+            diagnostico_correto: string | null;
+        };
         /** ListaCasos */
         ListaCasos: {
             /** Conversas */
@@ -339,12 +420,30 @@ export interface components {
             /** Content */
             content: string;
         };
-        /** NovoCaso */
-        NovoCaso: {
-            /** Especialidade */
-            especialidade: string;
+        /**
+         * NoTema
+         * @description Nó da árvore de temas: grande área, especialidade ou tema (rag/temas.py).
+         */
+        NoTema: {
+            /** Id */
+            id: string;
+            /** Nome */
+            nome: string;
+            /** Disponiveis */
+            disponiveis: number;
+            /** Respondidos */
+            respondidos: number;
+            /** Filhos */
+            filhos: components["schemas"]["NoTema"][];
+        };
+        /** NovoSimulado */
+        NovoSimulado: {
+            /** Selecao */
+            selecao: string[];
             /** Ciclo */
             ciclo: string;
+            /** Quantidade */
+            quantidade: number;
         };
         /** Ok */
         Ok: {
@@ -353,8 +452,8 @@ export interface components {
         };
         /** Opcoes */
         Opcoes: {
-            /** Especialidades */
-            especialidades: string[];
+            /** Arvore */
+            arvore: components["schemas"]["NoTema"][];
             /** Ciclos */
             ciclos: string[];
         };
@@ -396,6 +495,17 @@ export interface components {
             titulo: string;
             /** Url */
             url: string;
+        };
+        /** SimuladoLeitura */
+        SimuladoLeitura: {
+            /** Id */
+            id: string;
+            /** Ciclo */
+            ciclo: string;
+            /** Total */
+            total: number;
+            /** Casos */
+            casos: components["schemas"]["ItemSimulado"][];
         };
         /** UsuarioPublico */
         UsuarioPublico: {
@@ -554,12 +664,14 @@ export interface operations {
             };
         };
     };
-    especialidades_api_especialidades_get: {
+    arvore_de_temas_api_temas_get: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
-            cookie?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
         };
         requestBody?: never;
         responses: {
@@ -570,6 +682,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Opcoes"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -669,7 +790,7 @@ export interface operations {
             };
         };
     };
-    criar_caso_api_casos_post: {
+    criar_simulado_api_simulados_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -680,7 +801,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["NovoCaso"];
+                "application/json": components["schemas"]["NovoSimulado"];
             };
         };
         responses: {
@@ -691,6 +812,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CasoAberto"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proximo_caso_api_simulados__simulado_id__proximo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                simulado_id: string;
+            };
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CasoAberto"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ler_simulado_api_simulados__simulado_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                simulado_id: string;
+            };
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimuladoLeitura"];
                 };
             };
             /** @description Validation Error */

@@ -82,6 +82,26 @@ class CasoClinico(SQLModel, table=True):
     status: str = Field(default="aberta")  # aberta | encerrada
     feedback: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
     criada_em: datetime = Field(default_factory=agora, sa_column=_coluna_data())
+    # Posição no simulado (1, 2, ...); casos de antes dos simulados ficam sem.
+    simulado_id: str | None = Field(default=None, foreign_key="simulado.id", ondelete="CASCADE", index=True)
+    ordem: int | None = None
+
+
+class Simulado(SQLModel, table=True):
+    """Sequência de N casos sorteados dos temas que o estudante marcou.
+
+    A fila de fontes é sorteada na criação; cada caso só é gerado quando o estudante
+    chega nele — gerar os N de uma vez estouraria o limite de tokens/min do provedor.
+    """
+
+    __tablename__ = "simulado"
+
+    id: str = Field(primary_key=True)
+    usuario_id: int = Field(foreign_key="usuario.id", ondelete="CASCADE", index=True)
+    ciclo: str
+    selecao: list[str] = Field(sa_column=Column(JSONB, nullable=False))  # ids dos nós (rag/temas.py)
+    fila: list[int] = Field(sa_column=Column(ARRAY(Integer), nullable=False))  # fonte_referencia.id
+    criado_em: datetime = Field(default_factory=agora, sa_column=_coluna_data())
 
 
 class Resposta(SQLModel, table=True):
@@ -124,6 +144,9 @@ class FonteReferencia(SQLModel, table=True):
     dificuldade: str
     # Relevância no sorteio (rag/ingestao.py: internações SIH + temas de residência).
     peso: float = 1.0
+    # Lugar na árvore de temas do simulado (rag/temas.py); "" fora da árvore.
+    grande_area: str = ""
+    tema: str = Field(default="", index=True)
 
 
 class Trecho(SQLModel, table=True):
@@ -173,8 +196,18 @@ class Ok(BaseModel):
     ok: bool
 
 
+class NoTema(BaseModel):
+    """Nó da árvore de temas: grande área, especialidade ou tema (rag/temas.py)."""
+
+    id: str
+    nome: str
+    disponiveis: int  # fontes sorteáveis no nó
+    respondidos: int  # casos encerrados do estudante cuja condição está no nó
+    filhos: list["NoTema"]
+
+
 class Opcoes(BaseModel):
-    especialidades: list[str]
+    arvore: list[NoTema]
     ciclos: list[str]
 
 
@@ -184,6 +217,8 @@ class CasoResumo(BaseModel):
     especialidade: str
     status: Status
     criada_em: datetime
+    ordem: int | None = None  # posição no simulado
+    total: int | None = None  # casos do simulado
 
 
 class ListaCasos(BaseModel):
@@ -232,6 +267,9 @@ class CasoLeitura(BaseModel):
     mensagens: list[MensagemLeitura]
     feedback: FeedbackLeitura | None
     fontes: list[FonteLeitura]
+    simulado_id: str | None = None
+    ordem: int | None = None
+    total: int | None = None
 
 
 class CasoAberto(BaseModel):
@@ -239,3 +277,22 @@ class CasoAberto(BaseModel):
     titulo: str
     ciclo: str
     apresentacao: str
+    simulado_id: str
+    ordem: int
+    total: int
+
+
+class ItemSimulado(BaseModel):
+    caso_id: str
+    ordem: int
+    titulo: str
+    status: Status
+    acertou: bool | None  # só com o caso encerrado
+    diagnostico_correto: str | None
+
+
+class SimuladoLeitura(BaseModel):
+    id: str
+    ciclo: str
+    total: int
+    casos: list[ItemSimulado]

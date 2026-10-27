@@ -1,42 +1,29 @@
 import { Check, LogOut, Plus, ShieldAlert, Stethoscope, Trash2 } from 'lucide-react'
-import type { ConversaResumo, Opcoes, Usuario } from '../types'
+import type { ConversaResumo, Usuario } from '../types'
 
 interface Props {
-  opcoes: Opcoes | null
-  especialidade: string
-  ciclo: string
   ocupado: boolean
   aberta: boolean
   usuario: Usuario
   conversas: ConversaResumo[]
   conversaAtivaId: string | null
   onFechar: () => void
-  onEspecialidade: (v: string) => void
-  onCiclo: (v: string) => void
-  onNovoCaso: () => void
+  onNovoSimulado: () => void
   onAbrirConversa: (id: string) => void
   onApagarConversa: (id: string) => void
   onLogout: () => void
 }
 
 const rotulo = 'mb-1.5 block text-xs font-medium uppercase tracking-wide text-zinc-400'
-const campo =
-  'w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 ' +
-  'outline-none focus:border-zinc-500'
 
 export default function Sidebar({
-  opcoes,
-  especialidade,
-  ciclo,
   ocupado,
   aberta,
   usuario,
   conversas,
   conversaAtivaId,
   onFechar,
-  onEspecialidade,
-  onCiclo,
-  onNovoCaso,
+  onNovoSimulado,
   onAbrirConversa,
   onApagarConversa,
   onLogout,
@@ -66,52 +53,16 @@ export default function Sidebar({
           </div>
         </div>
 
-        <div className="space-y-3">
-          <div>
-            <label htmlFor="especialidade" className={rotulo}>
-              Especialidade
-            </label>
-            <select
-              id="especialidade"
-              className={campo}
-              value={especialidade}
-              onChange={(e) => onEspecialidade(e.target.value)}
-            >
-              {(opcoes?.especialidades ?? []).map((e) => (
-                <option key={e}>{e}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="ciclo" className={rotulo}>
-              Ciclo
-            </label>
-            <select
-              id="ciclo"
-              className={campo}
-              value={ciclo}
-              onChange={(e) => onCiclo(e.target.value)}
-            >
-              {(opcoes?.ciclos ?? []).map((c) => (
-                <option key={c} value={c}>
-                  {c[0].toUpperCase() + c.slice(1)}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            onClick={onNovoCaso}
-            disabled={ocupado || !opcoes}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-3 py-2.5
-                       text-sm font-medium text-white transition-colors hover:bg-teal-500
-                       disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Plus className="h-4 w-4" />
-            Novo caso
-          </button>
-        </div>
+        <button
+          onClick={onNovoSimulado}
+          disabled={ocupado}
+          className="flex w-full items-center justify-center gap-2 rounded-lg bg-teal-600 px-3 py-2.5
+                     text-sm font-medium text-white transition-colors hover:bg-teal-500
+                     disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Plus className="h-4 w-4" />
+          Novo simulado
+        </button>
 
         <div className="mt-5 flex min-h-0 flex-1 flex-col">
           <p className={rotulo}>Conversas</p>
@@ -142,6 +93,7 @@ export default function Sidebar({
                     <span className="block truncate text-sm text-zinc-200">{c.titulo}</span>
                     <span className="block truncate text-xs text-zinc-500">
                       {c.especialidade}
+                      {c.total && c.total > 1 ? ` · ${c.ordem}/${c.total}` : ''}
                     </span>
                   </span>
                 </button>

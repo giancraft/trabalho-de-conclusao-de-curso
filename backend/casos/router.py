@@ -9,7 +9,8 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
@@ -20,16 +21,21 @@ from models import (
     CasoAberto,
     CasoClinico,
     CasoLeitura,
+    CasoFonte,
     CasoResumo,
     FonteLeitura,
+    FonteReferencia,
+    ItemSimulado,
     ListaCasos,
     Opcoes,
     Resposta,
     SecaoConsultada,
+    Simulado,
+    SimuladoLeitura,
     Trecho,
     Usuario,
 )
-from rag import busca
+from rag import busca, temas
 from rag.citacao import citacao_abnt, leitura_fisiologia, url_secao
 
 router = APIRouter(prefix="/api", tags=["casos"])
@@ -53,9 +59,10 @@ def _falha_ia(e: Exception, acao: str) -> str:
     return f"Não foi possível {acao} agora. Tente novamente em instantes."
 
 
-class NovoCaso(BaseModel):
-    especialidade: str
+class NovoSimulado(BaseModel):
+    selecao: list[str] = Field(min_length=1)  # ids dos nós da árvore (rag/temas.py)
     ciclo: str
+    quantidade: int = Field(ge=1, le=10)
 
 
 class Mensagem(BaseModel):
@@ -147,9 +154,35 @@ async def _referencias(s: AsyncSession, caso_id: str) -> list[FonteLeitura]:
     return referencias
 
 
-@router.get("/especialidades", response_model=Opcoes)
-async def especialidades():
-    return Opcoes(especialidades=ai.ESPECIALIDADES, ciclos=ai.CICLOS)
+@router.get("/temas", response_model=Opcoes)
+async def arvore_de_temas(
+    usuario: Usuario = Depends(usuario_atual), s: AsyncSession = Depends(db.get_session)
+):
+    """Árvore grande área → especialidade → tema, com o que há para sortear em cada nó e
+    quantos casos o estudante já encerrou nele (pela condição sorteada, a fonte [1])."""
+    F = FonteReferencia
+    nivel = (F.grande_area, F.especialidade, F.tema)
+    disponiveis = {
+        tuple(l[:3]): l[3]
+        for l in await s.execute(select(*nivel, func.count()).where(F.sorteavel, F.tema != "").group_by(*nivel))
+    }
+    respondidos = {
+        tuple(l[:3]): l[3]
+        for l in await s.execute(
+            select(*nivel, func.count())
+            .join(CasoFonte, CasoFonte.fonte_id == F.id)
+            .join(CasoClinico, CasoClinico.id == CasoFonte.caso_id)
+            .where(
+                CasoClinico.usuario_id == usuario.id,
+                CasoClinico.status == "encerrada",
+                CasoFonte.etapa == "caso",
+                CasoFonte.numero == 1,
+            )
+            .group_by(*nivel)
+        )
+    }
+    nomes = dict((await s.execute(select(F.chave, F.titulo).where(F.chave.in_({k[2] for k in disponiveis})))).all())
+    return Opcoes(arvore=temas.arvore(disponiveis, respondidos, nomes), ciclos=ai.CICLOS)
 
 
 @router.get("/conversas", response_model=ListaCasos)
@@ -157,7 +190,13 @@ async def listar(
     usuario: Usuario = Depends(usuario_atual), s: AsyncSession = Depends(db.get_session)
 ):
     casos = await db.listar_casos(s, usuario.id)
-    return ListaCasos(conversas=[CasoResumo.model_validate(c, from_attributes=True) for c in casos])
+    totais = await db.totais_dos_simulados(s, usuario.id)
+    return ListaCasos(
+        conversas=[
+            CasoResumo.model_validate(c, from_attributes=True).model_copy(update={"total": totais.get(c.simulado_id)})
+            for c in casos
+        ]
+    )
 
 
 @router.get("/conversas/{caso_id}", response_model=CasoLeitura)
@@ -173,6 +212,7 @@ async def abrir(
     # As fontes seguem o mesmo critério do feedback: o título do capítulo É o
     # diagnóstico, então num caso aberto elas não saem daqui.
     fontes = await _referencias(s, caso_id) if caso.status == "encerrada" else []
+    simulado = await s.get(Simulado, caso.simulado_id) if caso.simulado_id else None
     return CasoLeitura(
         id=caso.id,
         titulo=caso.titulo,
@@ -182,6 +222,9 @@ async def abrir(
         mensagens=_historico(respostas),
         feedback=caso.feedback,
         fontes=fontes,
+        simulado_id=caso.simulado_id,
+        ordem=caso.ordem,
+        total=len(simulado.fila) if simulado else None,
     )
 
 
@@ -195,53 +238,119 @@ async def apagar(
         raise HTTPException(404, "Conversa não encontrada.")
 
 
-@router.post("/casos", response_model=CasoAberto)
-async def criar_caso(
-    corpo: NovoCaso,
-    usuario: Usuario = Depends(usuario_atual),
-    s: AsyncSession = Depends(db.get_session),
-):
-    if corpo.especialidade not in ai.ESPECIALIDADES:
-        raise HTTPException(422, f"Especialidade inválida: {corpo.especialidade}")
-    if corpo.ciclo not in ai.CICLOS:
-        raise HTTPException(422, f"Ciclo inválido: {corpo.ciclo}")
-    # A condição sai do corpus antes de o LLM escrever qualquer coisa (RN01): PCDT ou
-    # relato de caso, pelo peso de relevância e sem repetir para este estudante — o ciclo
-    # não entra no sorteio, só no que se cobra. Junto vêm as fontes de apoio —
-    # o PCDT ou a diretriz brasileira mais próximos —, numeradas [1], [2]... (RF04).
-    # Corpus vazio → nenhuma fonte → caso sem ancoragem: o sistema degrada, não quebra.
-    blocos = []
-    fonte = await busca.sortear_fonte(s, corpo.especialidade, usuario.id)
-    relato = bool(fonte) and fonte.tipo == "Relato de caso"
-    if fonte:
-        blocos.append((fonte, await busca.material(s, fonte, "caso")))
-        for apoio in await busca.fontes_de_apoio(s, fonte):
-            if trechos := await busca.material(s, apoio, "caso", principal=False):
-                blocos.append((apoio, trechos))
+async def _abrir_caso(
+    s: AsyncSession, usuario_id: int, fonte: FonteReferencia, ciclo: str, simulado: Simulado, ordem: int
+) -> CasoAberto:
+    """Gera o caso da fonte sorteada e o grava na posição `ordem` do simulado.
+
+    A condição vem do corpus antes de o LLM escrever qualquer coisa (RN01). Junto vêm as
+    fontes de apoio — o PCDT ou a diretriz brasileira mais próximos —, numeradas [1],
+    [2]... (RF04). O ciclo não muda a doença, só o que se cobra.
+    """
+    relato = fonte.tipo == "Relato de caso"
+    blocos = [(fonte, await busca.material(s, fonte, "caso"))]
+    for apoio in await busca.fontes_de_apoio(s, fonte):
+        if trechos := await busca.material(s, apoio, "caso", principal=False):
+            blocos.append((apoio, trechos))
     numerados = [(n, f, ts) for n, (f, ts) in enumerate(blocos, 1)]
     try:
-        caso = await ai.novo_caso(
-            corpo.especialidade,
-            corpo.ciclo,
-            fonte.titulo if fonte else "",
-            busca.contexto(numerados),
-            relato=relato,
-        )
+        caso = await ai.novo_caso(fonte.especialidade, ciclo, fonte.titulo, busca.contexto(numerados), relato=relato)
     except Exception as e:  # noqa: BLE001 — erro amigável, sem stack trace no cliente
         raise HTTPException(502, _falha_ia(e, "gerar o caso"))
 
     caso_id = await db.criar_caso(
         s,
-        usuario.id,
+        usuario_id,
         caso.titulo,
-        corpo.especialidade,
-        corpo.ciclo,
+        fonte.especialidade,
+        ciclo,
         caso.gabarito.model_dump(),
         fontes=[(f.id, n, [t.id for t in ts]) for n, f, ts in numerados],
+        simulado_id=simulado.id,
+        ordem=ordem,
     )
     apresentacao = f"{caso.apresentacao}\n\n{AVISO_RELATO}" if relato else caso.apresentacao
     await db.adicionar_resposta(s, caso_id, "assistant", apresentacao)
-    return CasoAberto(caso_id=caso_id, titulo=caso.titulo, ciclo=corpo.ciclo, apresentacao=apresentacao)
+    return CasoAberto(
+        caso_id=caso_id, titulo=caso.titulo, ciclo=ciclo, apresentacao=apresentacao,
+        simulado_id=simulado.id, ordem=ordem, total=len(simulado.fila),
+    )
+
+
+async def _simulado_do_usuario(s: AsyncSession, simulado_id: str, usuario_id: int):
+    par = await db.carregar_simulado(s, simulado_id, usuario_id)
+    if par is None:
+        raise HTTPException(404, "Simulado não encontrado.")
+    return par
+
+
+@router.post("/simulados", response_model=CasoAberto)
+async def criar_simulado(
+    corpo: NovoSimulado,
+    usuario: Usuario = Depends(usuario_atual),
+    s: AsyncSession = Depends(db.get_session),
+):
+    """Sorteia a fila de N casos dos temas marcados e já abre o primeiro.
+
+    Os outros são gerados um a um (`/proximo`): gerar todos agora estouraria o limite de
+    tokens/min do provedor e faria o estudante esperar por casos que talvez nem abra.
+    """
+    if corpo.ciclo not in ai.CICLOS:
+        raise HTTPException(422, f"Ciclo inválido: {corpo.ciclo}")
+    fila = await busca.sortear_fila(s, corpo.selecao, corpo.quantidade, usuario.id)
+    if not fila:
+        raise HTTPException(422, "Nenhum caso disponível nos temas marcados.")
+    simulado_id = await db.criar_simulado(s, usuario.id, corpo.ciclo, corpo.selecao, [f.id for f in fila])
+    simulado = await s.get(Simulado, simulado_id)
+    try:
+        return await _abrir_caso(s, usuario.id, fila[0], corpo.ciclo, simulado, 1)
+    except HTTPException:
+        # Sem o 1º caso o simulado não existe para o estudante: não fica órfão no banco.
+        await s.delete(simulado)
+        await s.commit()
+        raise
+
+
+@router.post("/simulados/{simulado_id}/proximo", response_model=CasoAberto)
+async def proximo_caso(
+    simulado_id: str,
+    usuario: Usuario = Depends(usuario_atual),
+    s: AsyncSession = Depends(db.get_session),
+):
+    simulado, casos = await _simulado_do_usuario(s, simulado_id, usuario.id)
+    if any(c.status == "aberta" for c in casos):
+        raise HTTPException(409, "Termine o caso atual antes de passar ao próximo.")
+    ordem = max((c.ordem for c in casos), default=0) + 1
+    if ordem > len(simulado.fila):
+        raise HTTPException(409, "Este simulado já terminou.")
+    fonte = await s.get(FonteReferencia, simulado.fila[ordem - 1])
+    return await _abrir_caso(s, usuario.id, fonte, simulado.ciclo, simulado, ordem)
+
+
+@router.get("/simulados/{simulado_id}", response_model=SimuladoLeitura)
+async def ler_simulado(
+    simulado_id: str,
+    usuario: Usuario = Depends(usuario_atual),
+    s: AsyncSession = Depends(db.get_session),
+):
+    """Progresso e resumo. O diagnóstico só aparece nos casos encerrados (RN06)."""
+    simulado, casos = await _simulado_do_usuario(s, simulado_id, usuario.id)
+    return SimuladoLeitura(
+        id=simulado.id,
+        ciclo=simulado.ciclo,
+        total=len(simulado.fila),
+        casos=[
+            ItemSimulado(
+                caso_id=c.id,
+                ordem=c.ordem,
+                titulo=c.titulo,
+                status=c.status,
+                acertou=(c.feedback or {}).get("acertou"),
+                diagnostico_correto=(c.feedback or {}).get("diagnostico_correto"),
+            )
+            for c in casos
+        ],
+    )
 
 
 @router.post(

@@ -8,8 +8,8 @@ Duas origens, um formato de trecho:
   dificuldade); o manual é seccionado pelo corpo da fonte dos capítulos;
 - artigo: `rag/corpus/pmc/<PMCID>.xml` (JATS), aprovado no `literatura.json` (com área).
 
-Rodar de novo pula o que já está no banco e sincroniza especialidade, dificuldade, papel e
-peso com os JSONs — é assim que uma correção da curadoria (RN05) chega ao sorteio.
+Rodar de novo pula o que já está no banco e sincroniza especialidade, dificuldade, papel,
+peso e lugar na árvore de temas (`rag/temas.py`) com os JSONs — é assim que uma correção da curadoria (RN05) chega ao sorteio.
 """
 
 import asyncio
@@ -25,7 +25,7 @@ from pathlib import Path
 
 from sqlmodel import select, update
 
-from rag import literatura
+from rag import apoio, literatura, temas
 from rag.catalogo import CORPUS_DIR, LICENCA, carregar
 from rag.citacao import titulo_periodico
 
@@ -238,15 +238,22 @@ RESIDENCIA = json.loads((Path(__file__).parent / "residencia.json").read_text())
 def peso(r: dict) -> float:
     """Peso no sorteio (rag/busca.py): o que é comum na prática e em prova sai mais.
 
-    Regra, sem LLM: PCDT e manual do MS pesam 1 + log10(1 + internações/ano no SIH/SUS), +3 se for tema
-    de residência (HAS ≈ 9,3; PCDT raro ≈ 1). Relato de caso é publicado por ser atípico:
-    0,3, ou 1 quando a doença de base (MeSH) é um tema comum — TB, dengue, sepse...
+    Regra, sem LLM: a relevância de PCDT e manual do MS é 1 + log10(1 + internações/ano
+    no SIH/SUS), +3 se for tema de residência, e o peso é essa relevância AO CUBO (HAS ≈
+    794; PCDT raro = 1). Sem o cubo, o tema mais importante pesava só ~4x o mais raro, e
+    os ~100 PCDT pouco cobrados somados levavam a maior parte dos sorteios: medido em 1.000
+    sorteios de Clínica Médica, os 23 temas de residência saíam em 27% dos casos. O cubo
+    mantém a ordem dos dois sinais e afasta os extremos (~60x).
+
+    Relato de caso é publicado por ser atípico: 0,3, ou 1 quando a doença de base (MeSH)
+    é um tema comum — TB, dengue, sepse... Relato e condição são sorteados em grupos
+    separados (`busca.PROB_RELATO`), então as duas escalas nunca disputam entre si.
     """
     if r["tipo"] == "Relato de caso":
         comum = any(m.startswith(t) for m in r.get("mesh", []) for t in RESIDENCIA["mesh_relatos"])
         return 1.0 if comum else 0.3
     bonus = 3 if r["chave"] in RESIDENCIA["pcdt"] else 0
-    return round(1 + math.log10(1 + (r.get("internacoes_ano") or 0)) + bonus, 2)
+    return round((1 + math.log10(1 + (r.get("internacoes_ano") or 0)) + bonus) ** 3, 2)
 
 
 def _documentos() -> list[tuple[dict, dict, callable]]:
@@ -299,8 +306,10 @@ async def ingerir() -> None:
         # que perdeu a especialidade fica com "" e nunca mais é sorteado (apagar quebraria
         # o RF14 dos casos que o usaram).
         catalogo = {r["chave"]: r for r in carregar() + literatura.carregar()}
+        arvore = temas.classificar(list(catalogo.values()), apoio.carregar(), temas.arvores_mesh())
         for chave in existentes & catalogo.keys():
             r = catalogo[chave]
+            area, tema = arvore.get(chave, ("", ""))
             await s.execute(
                 update(FonteReferencia)
                 .where(FonteReferencia.chave == chave)
@@ -309,6 +318,8 @@ async def ingerir() -> None:
                     dificuldade=r["dificuldade"] or "",
                     sorteavel=r.get("sorteavel", True) and bool(r["especialidade"]),
                     peso=peso(r),
+                    grande_area=area,
+                    tema=tema,
                 )
             )
         await s.commit()
@@ -331,6 +342,8 @@ async def ingerir() -> None:
                 especialidade=r["especialidade"],
                 dificuldade=r["dificuldade"] or "",
                 peso=peso(r),
+                grande_area=arvore.get(r["chave"], ("", ""))[0],
+                tema=arvore.get(r["chave"], ("", ""))[1],
                 **campos,
             )
             s.add(fonte)
@@ -424,7 +437,9 @@ if __name__ == "__main__":
     # Peso do sorteio: relevância pela regra, sem LLM.
     has = {"tipo": "PCDT", "chave": "hipertensao-arterial-sistemica", "internacoes_ano": 181771}
     raro = {"tipo": "PCDT", "chave": "x", "internacoes_ano": 0}
-    assert 9 < peso(has) < 10 and peso(raro) == 1.0, (peso(has), peso(raro))
+    assert 790 < peso(has) < 800 and peso(raro) == 1.0, (peso(has), peso(raro))
+    comum = {"tipo": "PCDT", "chave": "x", "internacoes_ano": 4000}  # ~mediana do SIH no corpus
+    assert peso(has) / peso(comum) > 6, "tema de residência frequente bem acima do PCDT comum"
     assert peso({"tipo": "Relato de caso", "mesh": ["Tuberculosis, Pulmonary"]}) == 1.0, "tema comum"
     assert peso({"tipo": "Relato de caso", "mesh": ["Kounis Syndrome"]}) == 0.3
     assert all(c in {r["chave"] for r in carregar()} for c in RESIDENCIA["pcdt"]), "chave de PCDT inexistente"
