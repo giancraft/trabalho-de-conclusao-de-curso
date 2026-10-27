@@ -77,7 +77,48 @@ ESPECIALIDADES = [
     "Otorrinolaringologia",
 ]
 
-DIFICULDADES = ["básico", "intermediário", "avançado"]
+# Ciclos do curso: o ciclo não escolhe a doença (rag/busca.py sorteia pela relevância),
+# escolhe o que se cobra na entrega final e no feedback.
+CICLOS = ["básico", "clínico", "internato"]
+
+# Campos da entrega final por ciclo, na ordem do formulário (casos/router.py valida).
+CAMPOS_POR_CICLO = {
+    "básico": ["diagnostico", "fisiologia", "fisiopatologia"],
+    "clínico": ["diagnostico", "fisiopatologia", "conduta"],
+    "internato": ["diagnostico", "fisiopatologia", "conduta"],
+}
+ROTULOS = {
+    "diagnostico": "Diagnóstico final",
+    "fisiologia": "Fisiologia normal",
+    "fisiopatologia": "Fisiopatologia",
+    "conduta": "Conduta",
+}
+
+# O que o feedback cobra em cada ciclo (rubrica do prompt de avaliar_diagnostico).
+RUBRICA = {
+    "básico": (
+        "CICLO BÁSICO: cobre o raciocínio fisiológico. Avalie o diagnóstico, a explicação de "
+        "como o órgão ou sistema funciona normalmente e de o que a doença altera nesse "
+        "funcionamento. Não cobre tratamento. Na justificativa_pedagogica, explique primeiro o "
+        "funcionamento normal e depois a alteração causada pela doença, ligando-a aos achados "
+        "do caso. A fisiologia normal não vem das fontes: não a cite com [n]. "
+        "conduta_referencia fica vazia."
+    ),
+    "clínico": (
+        "CICLO CLÍNICO: avalie o diagnóstico, a fisiopatologia e a escolha terapêutica "
+        "(primeira linha, classes de fármacos, medidas não farmacológicas e metas). Em "
+        "conduta_referencia, liste o tratamento de referência no nível do ciclo clínico — "
+        "primeira linha, alternativas e metas —, sem exigir dose."
+    ),
+    "internato": (
+        "INTERNATO: avalie tudo o que o ciclo clínico cobra e, com rigor, a conduta: "
+        "sequência, fármacos, doses (com cálculo pelo peso quando couber), vias, diluição, "
+        "volumes (ex.: soro), velocidade, duração e monitorização — inclusive as prescrições "
+        "feitas durante a conversa. Aponte cada dose ou volume errado em inconsistencias, com "
+        "o valor correto. Em conduta_referencia, descreva o passo a passo de referência com "
+        "doses, vias e volumes calculados para este paciente."
+    ),
+}
 
 # Contexto educacional obrigatório: nunca orientação clínica real (RN06 do TCC).
 _SYSTEM_BASE = (
@@ -120,6 +161,11 @@ class Ficha(_Schema):
         description="resultados dos exames complementares pertinentes ao diagnóstico e ao "
         "diferencial, com valor, unidade e valor de referência (imagem: laudo descritivo). "
         "Só achados do paciente: nunca procedimentos ou cirurgias como resultado"
+    )
+    evolucao: str = Field(
+        description="como o paciente evolui, com marcos de tempo e sinais vitais: com a "
+        "conduta adequada, sem tratamento e com conduta inadequada (dose ou volume errado, "
+        "fármaco contraindicado). É a referência para responder às prescrições do estudante"
     )
 
 
@@ -184,8 +230,24 @@ class Feedback(_Schema):
     )
     justificativa_pedagogica: str = Field(
         description="explicação didática conectando os achados do caso à fisiopatologia "
-        "do diagnóstico correto"
+        "do diagnóstico correto, no foco do ciclo"
     )
+    conduta_referencia: list[str] = Field(
+        description="passo a passo da conduta de referência, um passo por item, com as "
+        "citações [n]; detalhe conforme o ciclo. Vazia no ciclo básico"
+    )
+
+
+class FeedbackLeitura(Feedback):
+    """O feedback como a API devolve e o banco guarda.
+
+    Os padrões existem só aqui: feedbacks gravados antes dos ciclos não têm
+    `conduta_referencia`, e `leitura_indicada` é montada no servidor, sem LLM
+    (casos/router.py) — o schema enviado ao modelo continua todo obrigatório.
+    """
+
+    conduta_referencia: list[str] = []
+    leitura_indicada: str = ""
 
 
 class Achado(_Schema):
@@ -245,6 +307,12 @@ class RespostaCaso(_Schema):
         description="só se a mensagem pedir exame físico ou exames de forma vaga, sem nomear "
         "nada: 'Quais sistemas você examina?' ou 'Quais exames você solicita?'. Senão, vazio"
     )
+    evolucao: str = Field(
+        description="só se o estudante prescreveu ou fez alguma intervenção: o que acontece "
+        "com o paciente depois, com o tempo decorrido e sinais vitais (ex.: 'Após 1 h: PA "
+        "100/60 mmHg, FC 98 bpm...'), coerente com a ficha e com a adequação da dose, via e "
+        "volume. Sem julgar a conduta. Senão, vazio"
+    )
 
 
 class Pedidos(_Schema):
@@ -266,6 +334,11 @@ class Pedidos(_Schema):
         description="cada exame complementar nomeado pelo nome (laboratório, imagem, "
         "genético, procedimento diagnóstico), mesmo dentro de uma conduta"
     )
+    condutas: list[str] = Field(
+        description="cada prescrição ou intervenção feita agora no paciente, com o que o "
+        "estudante disse de fármaco, dose, via, volume e velocidade (ex.: 'SF 0,9% 20 mL/kg "
+        "IV em 1 h'), ou procedimento (ex.: 'oxigênio por cateter nasal 2 L/min')"
+    )
     vago: str = Field(
         description="'exame físico' ou 'exames' se o estudante pediu isso sem nomear "
         "nenhum item; senão vazio"
@@ -286,8 +359,10 @@ _SYSTEM_PEDIDOS = (
     "(\"investigar epilepsia farmacorresistente\", \"condição genética\") não entra.\n"
     "- Categoria genérica sem nome de exame (\"exames metabólicos direcionados\", "
     "\"outros exames\") não entra em exames.\n"
-    "- Encaminhamento, tratamento, orientação, raciocínio e hipóteses não entram em "
-    "nenhuma lista.\n"
+    "- Prescrição ou intervenção feita no paciente (fármaco, soro, oxigênio, "
+    "procedimento) vai para condutas, com dose, via, volume e velocidade como ditos.\n"
+    "- Encaminhamento, orientação, plano futuro sem execução agora, raciocínio e "
+    "hipóteses não entram em nenhuma lista.\n"
     "- Liste cada exame com o nome dado pelo estudante, um por item; não acrescente nada."
 )
 
@@ -309,6 +384,7 @@ def _checklist(p: Pedidos) -> str:
         ("Perguntas ao paciente (responda todas na `fala`)", p.perguntas),
         ("Exame físico (um item de `exame_fisico` para cada)", p.exame_fisico),
         ("Exames complementares (resultado de cada um em `exames`)", p.exames),
+        ("Condutas (evolução do paciente em `evolucao`)", p.condutas),
     ]
     linhas = [f"{titulo}:\n" + "\n".join(f"- {i}" for i in itens) for titulo, itens in secoes if itens]
     if p.vago and not (p.exame_fisico or p.exames):
@@ -452,8 +528,9 @@ def _gabarito(bruto: dict | Gabarito) -> Gabarito:
     if isinstance(bruto, Gabarito):
         return bruto
     # Casos gerados antes da ficha seguem jogáveis: o tutor improvisa, como antes.
-    vazia = {"anamnese": "", "exame_fisico": "", "exames": ""}
-    return Gabarito.model_validate({"ficha": vazia, **bruto})
+    vazia = {"anamnese": "", "exame_fisico": "", "exames": "", "evolucao": ""}
+    ficha = {**vazia, **bruto.get("ficha", {})}  # ficha anterior à `evolucao` também vale
+    return Gabarito.model_validate({**bruto, "ficha": ficha})
 
 
 def _client():
@@ -499,7 +576,7 @@ def _referencia(contexto: str, citar: bool = False) -> str:
     )
     return (
         "\n\nMATERIAL DE REFERÊNCIA — fontes numeradas, cada uma com o tipo. Para "
-        "critérios diagnósticos e conduta, siga nesta ordem: PCDT (Ministério da Saúde) > "
+        "critérios diagnósticos e conduta, siga nesta ordem: PCDT ou Manual MS (Ministério da Saúde) > "
         "Diretriz (sociedade médica) > Revisão e Relato de caso. A literatura serve só "
         "para apresentação clínica e epidemiologia; se contradisser uma diretriz "
         "brasileira, a diretriz vence. Parte do material está em inglês: escreva em "
@@ -529,7 +606,7 @@ def filtrar_citacoes(texto: str, validos: set[int]) -> str:
 
 
 async def novo_caso(
-    especialidade: str, dificuldade: str, condicao: str = "", contexto: str = ""
+    especialidade: str, ciclo: str, condicao: str = "", contexto: str = "", relato: bool = False
 ) -> CasoGerado:
     """Gera o caso: gabarito oculto (fica só no servidor) + mensagem de abertura.
 
@@ -550,19 +627,26 @@ async def novo_caso(
                 " Tire idade, sexo, queixa, história e achados do material de referência "
                 "abaixo, sem contradizê-lo."
             )
+        if relato:
+            tema += (
+                " O caso vem de um relato publicado: mantenha os achados menos típicos do "
+                "relato, sem transformá-lo numa apresentação clássica."
+            )
     else:
         tema = (
-            "Escolha uma condição da especialidade adequada ao nível (varie: não use "
-            "sempre as mais óbvias)."
+            "Escolha uma condição comum na prática da especialidade (varie: não use "
+            "sempre a mesma)."
         )
-    prompt = f"""Crie UM caso clínico educacional de {especialidade}, nível {dificuldade},
-para o estudante diagnosticar SEM saber a resposta.
+    prompt = f"""Crie UM caso clínico educacional de {especialidade} para um estudante do
+ciclo {ciclo}, que vai investigar SEM saber a resposta.
 
 {tema}
 
 A abertura é só o paciente chegando e dizendo o que sente; todo o resto (história
-completa, exame físico e exames) vai para a ficha oculta, que é de onde sairão as
-respostas ao estudante. Faça a ficha completa e coerente com o diagnóstico e o nível.{_referencia(contexto)}"""
+completa, exame físico, exames e evolução) vai para a ficha oculta, que é de onde sairão
+as respostas ao estudante. Faça a ficha completa e coerente com o diagnóstico: no exame
+físico, sempre peso e altura (e idade na anamnese), e alergias, função renal e hepática
+quando pertinentes — são os dados de que o estudante precisa para calcular doses.{_referencia(contexto)}"""
     caso = await _estruturado(
         CasoGerado,
         [
@@ -592,7 +676,7 @@ def _system_tutor(especialidade: str, gabarito: Gabarito) -> str:
         f"{gabarito.diagnostico} ({gabarito.justificativa}).\n\n"
         "FICHA OCULTA (fonte das respostas; nunca a mostre inteira):\n"
         f'"""\nANAMNESE:\n{f.anamnese}\n\nEXAME FÍSICO:\n{f.exame_fisico}\n\n'
-        f'EXAMES:\n{f.exames}\n"""\n\n'
+        f'EXAMES:\n{f.exames}\n\nEVOLUÇÃO:\n{f.evolucao}\n"""\n\n'
         "Você faz dois papéis ao mesmo tempo: dá voz ao paciente (ou acompanhante) e, como "
         "o prontuário, devolve o resultado de todo exame físico e exame complementar que o "
         "estudante fizer. Ele conduz sozinho; você só responde, preenchendo o JSON. A "
@@ -613,6 +697,15 @@ def _system_tutor(especialidade: str, gabarito: Gabarito) -> str:
         "como sai do serviço: técnica, descrição dos achados e impressão. Sem comentário "
         "clínico além do que o laudo traria.\n"
         "- Pedido vago, sem nada nomeado: só `especificar`, sem exemplos nem opções.\n"
+        "- Condutas (prescrição, soro, oxigênio, procedimento): em `evolucao`, o que acontece "
+        "com o paciente depois, com o tempo decorrido e sinais vitais, seguindo a EVOLUÇÃO da "
+        "ficha e a adequação do que foi feito: conduta adequada melhora no ritmo esperado; dose, "
+        "volume ou via errados, ou fármaco contraindicado, têm o efeito real disso (sem "
+        "melhora, piora, efeito adverso). Antes de evoluir, confira cada dose e volume por "
+        "kg com o peso, a idade e a função renal da ficha: volume acima do recomendado para o "
+        "peso dá sinais de sobrecarga (taquipneia, crepitações, edema, queda da SpO₂); dose "
+        "acima, toxicidade; abaixo, resposta insuficiente. Nunca diga se a conduta está "
+        "certa: só mostre o paciente. A fala reage como o paciente reagiria.\n"
         "- O que não estiver na ficha: invente coerente com o diagnóstico; o que não for "
         "pertinente vem normal ou o paciente nega.\n"
         "- NUNCA elogie ou avalie a conduta, sugira próximos passos, liste opções ou "
@@ -658,6 +751,8 @@ def _renderizar(r: RespostaCaso) -> str:
             )
         partes += [f"**{e.exame}**\n\n{e.resultado.strip()}" for e in laudo]
         blocos.append("\n\n".join(partes))
+    if r.evolucao.strip():
+        blocos.append(f"**Evolução:** {r.evolucao.strip()}")
     if r.especificar.strip():
         blocos.append(f"*{r.especificar.strip()}*")
     # Rede de segurança: com o schema, não deveria sobrar resposta vazia.
@@ -699,17 +794,23 @@ async def responder_chat(
     yield _renderizar(r)
 
 
+def texto_resposta(resposta: dict[str, str]) -> str:
+    """Entrega final como texto rotulado, na ordem do formulário — para o histórico e o prompt."""
+    return "\n\n".join(f"{ROTULOS[c]}: {resposta[c].strip()}" for c in ROTULOS if resposta.get(c, "").strip())
+
+
 async def avaliar_diagnostico(
     especialidade: str,
+    ciclo: str,
     gabarito: dict | Gabarito,
     historico: list[dict],
-    diagnostico: str,
+    resposta: dict[str, str],
     contexto: str = "",
 ) -> Feedback:
-    """Feedback formativo (RN02: explicativo, nunca só classificatório).
+    """Feedback formativo (RN02: explicativo, nunca só classificatório), com a rubrica do ciclo.
 
     `contexto` traz o diagnóstico diferencial e a conduta da fonte do caso (RF04): é o
-    que dá respaldo às hipóteses não consideradas e à justificativa pedagógica.
+    que dá respaldo às hipóteses não consideradas, à justificativa e à conduta de referência.
     """
     # Rótulos explícitos: com [assistant]/[user] o modelo creditava ao estudante achados
     # que o próprio caso tinha entregado.
@@ -718,7 +819,7 @@ async def avaliar_diagnostico(
         f"[{rotulo.get(m['role'], m['role'])}] {m['content']}"
         for m in _janela(historico, TURNOS_AVALIACAO)
     )
-    prompt = f"""O estudante encerrou a investigação e deu seu diagnóstico final.
+    prompt = f"""O estudante ({especialidade}, {ciclo}) encerrou a investigação e entregou a resposta final.
 
 DIAGNÓSTICO CORRETO (gabarito): {_gabarito(gabarito).model_dump_json()}
 
@@ -727,12 +828,14 @@ CONVERSA DA INVESTIGAÇÃO:
 {conversa}
 \"\"\"
 
-DIAGNÓSTICO DO ESTUDANTE:
+RESPOSTA FINAL DO ESTUDANTE:
 \"\"\"
-{diagnostico}
+{texto_resposta(resposta)}
 \"\"\"
 
-Avalie o raciocínio ao longo da investigação e o diagnóstico final. Julgue só o que o
+{RUBRICA[ciclo]}
+
+Avalie o raciocínio ao longo da investigação e a resposta final. Julgue só o que o
 estudante escreveu nas mensagens [ESTUDANTE]: o que o [CASO] informou não é mérito dele,
 e o que ele não descreveu não foi feito. A ficha do gabarito mostra o que havia para
 descobrir. Seja construtivo e explicativo; não atribua nota numérica.{_referencia(contexto, citar=True)}"""
@@ -751,6 +854,8 @@ descobrir. Seja construtivo e explicativo; não atribua nota numérica.{_referen
             "inconsistencias": [filtrar_citacoes(t, validos) for t in fb.inconsistencias],
             "hipoteses_nao_consideradas": [filtrar_citacoes(t, validos) for t in fb.hipoteses_nao_consideradas],
             "justificativa_pedagogica": filtrar_citacoes(fb.justificativa_pedagogica, validos),
+            # O schema obriga o campo; no básico ele fica vazio mesmo que o modelo escreva.
+            "conduta_referencia": [] if ciclo == "básico" else [filtrar_citacoes(t, validos) for t in fb.conduta_referencia],
         }
     )
 
@@ -815,7 +920,7 @@ if __name__ == "__main__":
     # 4b. Ficha: exigida na geração, opcional na leitura (casos antigos) e no prompt do tutor.
     defs = esquema["schema"]["$defs"]
     assert "ficha" in defs["Gabarito"]["required"] and defs["Ficha"]["additionalProperties"] is False
-    assert set(defs["Ficha"]["required"]) == {"anamnese", "exame_fisico", "exames"}
+    assert set(defs["Ficha"]["required"]) == {"anamnese", "exame_fisico", "exames", "evolucao"}
     assert _gabarito({"diagnostico": "IC", "justificativa": "..."}).ficha.exames == "", "caso antigo"
     com_ficha = _gabarito({"diagnostico": "IC", "justificativa": "...", "ficha": {
         "anamnese": "dispneia há 2 meses", "exame_fisico": "B3", "exames": "BNP 900 pg/mL"}})
@@ -827,7 +932,7 @@ if __name__ == "__main__":
     resp = _formato(RespostaCaso)["json_schema"]["schema"]
     assert resp["additionalProperties"] is False
     assert all(d["additionalProperties"] is False for d in resp["$defs"].values())
-    vazia = dict(perguntas=[], quem_fala="Mãe", fala="", exame_fisico=[], exames=[], especificar="")
+    vazia = dict(perguntas=[], quem_fala="Mãe", fala="", exame_fisico=[], exames=[], especificar="", evolucao="")
     so_fala = _renderizar(RespostaCaso(**{**vazia, "fala": '"Faz três dias, doutor."'}))
     assert so_fala == '**Mãe:** "Faz três dias, doutor."', "aspas do modelo não duplicam"
     completa = _renderizar(RespostaCaso(**{
@@ -850,8 +955,8 @@ if __name__ == "__main__":
     # 4d. Pedidos extraídos antes da resposta e o checklist que vai junto da mensagem.
     ped = _formato(Pedidos)["json_schema"]["schema"]
     assert ped["additionalProperties"] is False
-    assert set(ped["required"]) == {"perguntas", "exame_fisico", "exames", "vago"}
-    nada = dict(perguntas=[], exame_fisico=[], exames=[], vago="")
+    assert set(ped["required"]) == {"perguntas", "exame_fisico", "exames", "condutas", "vago"}
+    nada = dict(perguntas=[], exame_fisico=[], exames=[], condutas=[], vago="")
     assert _checklist(Pedidos(**nada)) == "", "sem pedidos, a mensagem segue intacta"
     lista = _checklist(Pedidos(**{**nada, "perguntas": ["casos na família?"], "exames": ["TSH", "exoma"]}))
     assert lista.startswith("\n\nITENS A RESPONDER") and "- TSH\n- exoma" in lista
@@ -922,7 +1027,7 @@ if __name__ == "__main__":
 
         return chamadas, SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
 
-    ok = '{"perguntas": [], "exame_fisico": [], "exames": ["TSH"], "vago": ""}'
+    ok = '{"perguntas": [], "exame_fisico": [], "exames": ["TSH"], "condutas": [], "vago": ""}'
     chamadas, falso = cliente_falso(["", ok])
     cliente_real = _client
     _client = lambda: falso  # noqa: E731
@@ -957,4 +1062,19 @@ if __name__ == "__main__":
     _BASE_URL = "https://api.groq.com/openai/v1"
     assert "X-OpenRouter-Title" not in cliente_real().default_headers
 
-    print("OK: parser, janela deslizante, schema strict, gabarito, bloco de referência, citações e provedor.")
+    # 9. Ciclos: campos, rubrica, entrega rotulada, evolução e feedback antigo.
+    assert set(CAMPOS_POR_CICLO) == set(RUBRICA) == set(CICLOS)
+    assert all(c[0] == "diagnostico" and set(c) <= set(ROTULOS) for c in CAMPOS_POR_CICLO.values())
+    assert "conduta" not in CAMPOS_POR_CICLO["básico"] and "fisiologia" in CAMPOS_POR_CICLO["básico"]
+    txt = texto_resposta({"conduta": "SF 0,9% 20 mL/kg", "diagnostico": "Choque", "fisiologia": " "})
+    assert txt == "Diagnóstico final: Choque\n\nConduta: SF 0,9% 20 mL/kg", "ordem do formulário, sem vazios"
+    evol = _renderizar(RespostaCaso(**{**vazia, "fala": "Melhorei", "evolucao": "Após 1 h: PA 110/70 mmHg."}))
+    assert evol.endswith("**Evolução:** Após 1 h: PA 110/70 mmHg.") and evol.startswith("**Mãe:**")
+    assert "Condutas" in _checklist(Pedidos(**{**nada, "condutas": ["SF 0,9% 20 mL/kg IV"]}))
+    assert "conduta_referencia" in _formato(Feedback)["json_schema"]["schema"]["required"], "LLM preenche sempre"
+    antigo = FeedbackLeitura.model_validate({"acertou": True, "diagnostico_correto": "IC", "acertos": [],
+        "inconsistencias": [], "hipoteses_nao_consideradas": [], "justificativa_pedagogica": "j"})
+    assert antigo.conduta_referencia == [] and antigo.leitura_indicada == "", "feedback anterior aos ciclos"
+    assert "EVOLUÇÃO" in tutor, "a evolução da ficha vai para o tutor"
+
+    print("OK: parser, janela, schema strict, gabarito, referência, citações, provedor e ciclos.")

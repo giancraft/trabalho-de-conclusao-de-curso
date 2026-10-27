@@ -4,7 +4,9 @@ import {
   CheckCircle2,
   CircleHelp,
   ClipboardCheck,
+  GraduationCap,
   Library,
+  ListOrdered,
   XCircle,
 } from 'lucide-react'
 import type { Feedback, Fonte } from '../types'
@@ -80,12 +82,14 @@ function Secao({
 
 const corDoTipo: Record<string, string> = {
   PCDT: 'bg-teal-50 text-teal-800 ring-teal-200',
+  'Manual MS': 'bg-emerald-50 text-emerald-800 ring-emerald-200',
   Diretriz: 'bg-blue-50 text-blue-800 ring-blue-200',
   Revisão: 'bg-zinc-50 text-zinc-700 ring-zinc-200',
   'Relato de caso': 'bg-amber-50 text-amber-800 ring-amber-200',
 }
 const nomeDoTipo: Record<string, string> = {
   PCDT: 'Diretriz oficial (MS)',
+  'Manual MS': 'Manual oficial (MS)',
   Diretriz: 'Diretriz de sociedade',
   Revisão: 'Revisão',
   'Relato de caso': 'Relato de caso',
@@ -124,6 +128,46 @@ function Citacao({ citacao, destaque }: { citacao: string; destaque: string }) {
       <strong>{destaque}</strong>
       <ComLinks texto={citacao.slice(i + destaque.length)} />
     </>
+  )
+}
+
+/** Conduta de referência: passos numerados, com as citações [n] clicáveis. */
+function CondutaReferencia({ passos }: { passos: string[] }) {
+  if (passos.length === 0) return null
+  return (
+    <div>
+      <h4 className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-teal-700">
+        <ListOrdered className="h-4 w-4" />
+        Conduta de referência
+      </h4>
+      <ol className="list-decimal space-y-1 pl-5 text-sm leading-relaxed text-zinc-700">
+        {passos.map((passo) => (
+          <li key={passo}>
+            <ComCitacoes texto={passo} />
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+/** Leitura indicada de fisiologia (ciclo básico): só a referência ABNT, título em negrito. */
+function LeituraIndicada({ referencia }: { referencia: string }) {
+  if (!referencia) return null
+  return (
+    <div className="rounded-lg bg-zinc-50 px-3 py-2.5">
+      <h4 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-zinc-700">
+        <GraduationCap className="h-4 w-4" />
+        Para aprofundar a fisiologia
+      </h4>
+      <p className="text-sm leading-relaxed text-zinc-700">
+        {referencia.split('**').map((parte, i) => (i % 2 ? <strong key={i}>{parte}</strong> : parte))}
+      </p>
+      <p className="mt-1 text-xs text-zinc-500">
+        A explicação da fisiologia normal acima é do modelo, não das fontes citadas; use o livro
+        para conferir e aprofundar.
+      </p>
+    </div>
   )
 }
 
@@ -217,6 +261,8 @@ export default function FeedbackCard({ fb, fontes }: { fb: Feedback; fontes: Fon
           cor="text-blue-700"
           itens={fb.justificativa_pedagogica}
         />
+        <CondutaReferencia passos={fb.conduta_referencia ?? []} />
+        <LeituraIndicada referencia={fb.leitura_indicada ?? ''} />
         <Referencias fontes={fontes} />
       </div>
 

@@ -4,6 +4,7 @@ import type {
   ConversaResumo,
   Feedback,
   Opcoes,
+  RespostaFinal,
   Usuario,
 } from './types'
 
@@ -69,12 +70,12 @@ export async function apagarConversa(id: string): Promise<void> {
 
 export async function criarCaso(
   especialidade: string,
-  dificuldade: string,
+  ciclo: string,
 ): Promise<CasoAberto> {
   const res = await fetch('/api/casos', {
     method: 'POST',
     headers: json,
-    body: JSON.stringify({ especialidade, dificuldade }),
+    body: JSON.stringify({ especialidade, ciclo }),
   })
   return (await checar(res)).json()
 }
@@ -102,12 +103,12 @@ export async function enviarMensagem(
 
 export async function enviarDiagnostico(
   casoId: string,
-  diagnostico: string,
+  resposta: RespostaFinal,
 ): Promise<Feedback> {
   const res = await fetch(`/api/casos/${casoId}/diagnostico`, {
     method: 'POST',
     headers: json,
-    body: JSON.stringify({ diagnostico }),
+    body: JSON.stringify(resposta),
   })
   return (await checar(res)).json()
 }

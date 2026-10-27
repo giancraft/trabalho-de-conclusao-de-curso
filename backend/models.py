@@ -23,7 +23,7 @@ from sqlalchemy import Column, DateTime, Integer, LargeBinary, String
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Field, SQLModel
 
-from casos.ai import Feedback
+from casos.ai import FeedbackLeitura
 from rag.embeddings import DIMENSAO
 
 
@@ -76,7 +76,7 @@ class CasoClinico(SQLModel, table=True):
     usuario_id: int = Field(foreign_key="usuario.id", ondelete="CASCADE", index=True)
     titulo: str
     especialidade: str
-    dificuldade: str
+    ciclo: str  # básico | clínico | internato — define o que se cobra (casos/ai.py)
     # JSONB: o driver entrega dict direto, sem json.dumps/loads à mão.
     gabarito: dict = Field(sa_column=Column(JSONB, nullable=False))
     status: str = Field(default="aberta")  # aberta | encerrada
@@ -120,7 +120,10 @@ class FonteReferencia(SQLModel, table=True):
     sorteavel: bool = True
     recuperada_em: datetime = Field(default_factory=agora, sa_column=_coluna_data())
     especialidade: str
+    # Complexidade pela regra do catálogo (ICSAP/SIH): dado de catálogo, fora do sorteio.
     dificuldade: str
+    # Relevância no sorteio (rag/ingestao.py: internações SIH + temas de residência).
+    peso: float = 1.0
 
 
 class Trecho(SQLModel, table=True):
@@ -172,7 +175,7 @@ class Ok(BaseModel):
 
 class Opcoes(BaseModel):
     especialidades: list[str]
-    dificuldades: list[str]
+    ciclos: list[str]
 
 
 class CasoResumo(BaseModel):
@@ -224,13 +227,15 @@ class CasoLeitura(BaseModel):
     id: str
     titulo: str
     especialidade: str
+    ciclo: str
     status: Status
     mensagens: list[MensagemLeitura]
-    feedback: Feedback | None
+    feedback: FeedbackLeitura | None
     fontes: list[FonteLeitura]
 
 
 class CasoAberto(BaseModel):
     caso_id: str
     titulo: str
+    ciclo: str
     apresentacao: str

@@ -4,7 +4,7 @@ import type { ConversaResumo, Opcoes, Usuario } from '../types'
 interface Props {
   opcoes: Opcoes | null
   especialidade: string
-  dificuldade: string
+  ciclo: string
   ocupado: boolean
   aberta: boolean
   usuario: Usuario
@@ -12,7 +12,7 @@ interface Props {
   conversaAtivaId: string | null
   onFechar: () => void
   onEspecialidade: (v: string) => void
-  onDificuldade: (v: string) => void
+  onCiclo: (v: string) => void
   onNovoCaso: () => void
   onAbrirConversa: (id: string) => void
   onApagarConversa: (id: string) => void
@@ -27,7 +27,7 @@ const campo =
 export default function Sidebar({
   opcoes,
   especialidade,
-  dificuldade,
+  ciclo,
   ocupado,
   aberta,
   usuario,
@@ -35,7 +35,7 @@ export default function Sidebar({
   conversaAtivaId,
   onFechar,
   onEspecialidade,
-  onDificuldade,
+  onCiclo,
   onNovoCaso,
   onAbrirConversa,
   onApagarConversa,
@@ -84,17 +84,19 @@ export default function Sidebar({
           </div>
 
           <div>
-            <label htmlFor="dificuldade" className={rotulo}>
-              Dificuldade
+            <label htmlFor="ciclo" className={rotulo}>
+              Ciclo
             </label>
             <select
-              id="dificuldade"
+              id="ciclo"
               className={campo}
-              value={dificuldade}
-              onChange={(e) => onDificuldade(e.target.value)}
+              value={ciclo}
+              onChange={(e) => onCiclo(e.target.value)}
             >
-              {(opcoes?.dificuldades ?? []).map((d) => (
-                <option key={d}>{d}</option>
+              {(opcoes?.ciclos ?? []).map((c) => (
+                <option key={c} value={c}>
+                  {c[0].toUpperCase() + c.slice(1)}
+                </option>
               ))}
             </select>
           </div>

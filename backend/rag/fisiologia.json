@@ -1,0 +1,37 @@
+{
+  "_sobre": "Leitura indicada de fisiologia no feedback do ciclo básico: liga o capítulo do CID-10 da doença à unidade do Guyton & Hall. Só a referência bibliográfica — nenhum texto do livro é guardado ou usado no prompt (direito autoral, Lei 9.610/98). A explicação do feedback é do modelo; o livro é indicação para aprofundar. REVISAR: conferir edição, unidades e capítulos com o exemplar.",
+  "revisar": true,
+  "obra": "HALL, John E.; HALL, Michael E. **Guyton & Hall tratado de fisiologia médica**. 14. ed. Rio de Janeiro: GEN Guanabara Koogan, 2021.",
+  "por_cid": [
+    [["I"], ["Unidade III (O coração)", "Unidade IV (A circulação)"]],
+    [["N"], ["Unidade V (Os líquidos corporais e os rins)"]],
+    [["J"], ["Unidade VII (Respiração)"]],
+    [["D5", "D6", "D7", "D8"], ["Unidade VI (Células sanguíneas, imunidade e coagulação sanguínea)"]],
+    [["A", "B"], ["Unidade VI (Células sanguíneas, imunidade e coagulação sanguínea)"]],
+    [["E"], ["Unidade XIV (Endocrinologia e reprodução)", "Unidade XIII (Metabolismo e regulação da temperatura)"]],
+    [["K"], ["Unidade XII (Fisiologia gastrointestinal)"]],
+    [["G"], ["Unidade IX (O sistema nervoso: princípios gerais e fisiologia sensorial)", "Unidade XI (O sistema nervoso: neurofisiologia motora e integrativa)"]],
+    [["F"], ["Unidade XI (O sistema nervoso: neurofisiologia motora e integrativa)"]],
+    [["H"], ["Unidade X (O sistema nervoso: os sentidos especiais)"]],
+    [["M"], ["Unidade II (Fisiologia da membrana, nervo e músculo)"]],
+    [["O"], ["Unidade XIV (Endocrinologia e reprodução)"]],
+    [["L"], ["Unidade XIII (Metabolismo e regulação da temperatura)"]]
+  ],
+  "por_especialidade": {
+    "Cardiologia": ["Unidade III (O coração)", "Unidade IV (A circulação)"],
+    "Nefrologia": ["Unidade V (Os líquidos corporais e os rins)"],
+    "Urologia": ["Unidade V (Os líquidos corporais e os rins)"],
+    "Pneumologia": ["Unidade VII (Respiração)"],
+    "Hematologia": ["Unidade VI (Células sanguíneas, imunidade e coagulação sanguínea)"],
+    "Infectologia": ["Unidade VI (Células sanguíneas, imunidade e coagulação sanguínea)"],
+    "Endocrinologia": ["Unidade XIV (Endocrinologia e reprodução)"],
+    "Ginecologia e Obstetrícia": ["Unidade XIV (Endocrinologia e reprodução)"],
+    "Gastroenterologia": ["Unidade XII (Fisiologia gastrointestinal)"],
+    "Neurologia": ["Unidade IX (O sistema nervoso: princípios gerais e fisiologia sensorial)", "Unidade XI (O sistema nervoso: neurofisiologia motora e integrativa)"],
+    "Psiquiatria": ["Unidade XI (O sistema nervoso: neurofisiologia motora e integrativa)"],
+    "Oftalmologia": ["Unidade X (O sistema nervoso: os sentidos especiais)"],
+    "Otorrinolaringologia": ["Unidade X (O sistema nervoso: os sentidos especiais)"],
+    "Ortopedia e Traumatologia": ["Unidade II (Fisiologia da membrana, nervo e músculo)"],
+    "Reumatologia": ["Unidade II (Fisiologia da membrana, nervo e músculo)"]
+  }
+}

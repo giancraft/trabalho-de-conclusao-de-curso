@@ -185,6 +185,8 @@ export interface components {
             caso_id: string;
             /** Titulo */
             titulo: string;
+            /** Ciclo */
+            ciclo: string;
             /** Apresentacao */
             apresentacao: string;
         };
@@ -203,6 +205,8 @@ export interface components {
             titulo: string;
             /** Especialidade */
             especialidade: string;
+            /** Ciclo */
+            ciclo: string;
             /**
              * Status
              * @enum {string}
@@ -210,7 +214,7 @@ export interface components {
             status: "aberta" | "encerrada";
             /** Mensagens */
             mensagens: components["schemas"]["MensagemLeitura"][];
-            feedback: components["schemas"]["Feedback"] | null;
+            feedback: components["schemas"]["FeedbackLeitura"] | null;
             /** Fontes */
             fontes: components["schemas"]["FonteLeitura"][];
         };
@@ -233,13 +237,15 @@ export interface components {
              */
             criada_em: string;
         };
-        /** Diagnostico */
-        Diagnostico: {
-            /** Diagnostico */
-            diagnostico: string;
-        };
-        /** Feedback */
-        Feedback: {
+        /**
+         * FeedbackLeitura
+         * @description O feedback como a API devolve e o banco guarda.
+         *
+         *     Os padrões existem só aqui: feedbacks gravados antes dos ciclos não têm
+         *     `conduta_referencia`, e `leitura_indicada` é montada no servidor, sem LLM
+         *     (casos/router.py) — o schema enviado ao modelo continua todo obrigatório.
+         */
+        FeedbackLeitura: {
             /** Acertou */
             acertou: boolean;
             /**
@@ -264,9 +270,19 @@ export interface components {
             hipoteses_nao_consideradas: string[];
             /**
              * Justificativa Pedagogica
-             * @description explicação didática conectando os achados do caso à fisiopatologia do diagnóstico correto
+             * @description explicação didática conectando os achados do caso à fisiopatologia do diagnóstico correto, no foco do ciclo
              */
             justificativa_pedagogica: string;
+            /**
+             * Conduta Referencia
+             * @default []
+             */
+            conduta_referencia: string[];
+            /**
+             * Leitura Indicada
+             * @default
+             */
+            leitura_indicada: string;
         };
         /**
          * FonteLeitura
@@ -327,8 +343,8 @@ export interface components {
         NovoCaso: {
             /** Especialidade */
             especialidade: string;
-            /** Dificuldade */
-            dificuldade: string;
+            /** Ciclo */
+            ciclo: string;
         };
         /** Ok */
         Ok: {
@@ -339,8 +355,8 @@ export interface components {
         Opcoes: {
             /** Especialidades */
             especialidades: string[];
-            /** Dificuldades */
-            dificuldades: string[];
+            /** Ciclos */
+            ciclos: string[];
         };
         /** Registro */
         Registro: {
@@ -350,6 +366,29 @@ export interface components {
             email: string;
             /** Senha */
             senha: string;
+        };
+        /**
+         * RespostaFinal
+         * @description Entrega final do caso; os campos obrigatórios dependem do ciclo (ai.CAMPOS_POR_CICLO).
+         */
+        RespostaFinal: {
+            /** Diagnostico */
+            diagnostico: string;
+            /**
+             * Fisiologia
+             * @default
+             */
+            fisiologia: string;
+            /**
+             * Fisiopatologia
+             * @default
+             */
+            fisiopatologia: string;
+            /**
+             * Conduta
+             * @default
+             */
+            conduta: string;
         };
         /** SecaoConsultada */
         SecaoConsultada: {
@@ -715,7 +754,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Diagnostico"];
+                "application/json": components["schemas"]["RespostaFinal"];
             };
         };
         responses: {
@@ -725,7 +764,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Feedback"];
+                    "application/json": components["schemas"]["FeedbackLeitura"];
                 };
             };
             /** @description Validation Error */

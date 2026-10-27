@@ -17,6 +17,10 @@ Nada aqui usa IA generativa. Cada linha do `corpus.json` diz qual regra a decidi
 PCDT sem CID (diretrizes de assistência, linhas de cuidado) ficam sem especialidade e
 fora da ingestão até a curadoria decidir. Portaria com mais de 10 anos ou sem data
 legível ganha `revisar: true`.
+
+Temas comuns sem PCDT (tuberculose, dengue) entram por manual do MS, listado à mão em
+`manuais.json` (tipo "Manual MS"): a CID vem da lista curada e o resto segue as mesmas
+regras — área, internações, dificuldade, atualidade.
 """
 
 import collections
@@ -38,6 +42,7 @@ from rag.prevalencia import carregar_icsap, carregar_prevalencia, dentro
 RAIZ = Path(__file__).resolve().parent
 CORPUS_JSON = RAIZ / "corpus.json"
 CURADORIA_JSON = RAIZ / "curadoria.json"
+MANUAIS_JSON = RAIZ / "manuais.json"
 CORPUS_DIR = RAIZ / "corpus"
 
 LISTA = "https://www.gov.br/saude/pt-br/assuntos/pcdt/{letra}"
@@ -213,6 +218,10 @@ def _texto(pdf: Path) -> str:
         return "\n".join(pag.get_text() for pag in doc)
 
 
+def manuais() -> list[dict]:
+    return json.loads(MANUAIS_JSON.read_text())["manuais"]
+
+
 def carregar() -> list[dict]:
     return json.loads(CORPUS_JSON.read_text()) if CORPUS_JSON.exists() else []
 
@@ -257,6 +266,22 @@ def gerar() -> None:
             }
         )
 
+    for m in manuais():
+        _baixar_pdf(m)
+        publicado = date.fromisoformat(m["publicado_em"])
+        corpus.append(
+            {
+                **m,
+                "tipo": "Manual MS",
+                "orgao": ORGAO,
+                "internacoes_ano": sum(prevalencia.get(c, 0) for c in {c[:3] for c in m["cid10"]}),
+                "especialidade": especialidade(m["cid10"]),
+                "dificuldade": None,
+                "regra": "CID do manuais.json → área",
+                "revisar": (hoje - publicado).days > 365 * ANOS_ATUAL,
+            }
+        )
+
     # Atualidade: dois documentos com exatamente as mesmas CIDs cobrem a mesma condição —
     # fica o mais recente, e o outro sai do sorteio dizendo por quê.
     por_cids = collections.defaultdict(list)
@@ -290,7 +315,9 @@ def gerar() -> None:
 
 
 def _relatorio(corpus: list[dict]) -> None:
-    from casos.ai import DIFICULDADES, ESPECIALIDADES
+    from casos.ai import ESPECIALIDADES
+
+    DIFICULDADES = ("básico", "intermediário", "avançado")  # o caso usa o ciclo; isto é só do corpus
 
     aprovados = [r for r in corpus if r["especialidade"] and r["dificuldade"]]
     print(f"{len(corpus)} PCDT; {len(aprovados)} com especialidade e dificuldade; "
@@ -347,4 +374,8 @@ Diferencial com J44 (DPOC)."""
     assert dificuldade(["J45.0"], icsap, 10, 5)[0] == "básico"
     assert dificuldade(["M05.0"], icsap, 10, 5)[0] == "intermediário"
     assert dificuldade(["E22.0"], icsap, 1, 5)[0] == "avançado"
-    print("OK: CID → área, portaria, seção de CIDs e dificuldade.")
+    for m in manuais():
+        assert especialidade(m["cid10"]), f"manual sem área: {m['chave']}"
+        assert m["url"].startswith("https://www.gov.br/saude/") and m["url"].endswith("/view"), m["url"]
+    assert area_da_cid("A15") == "Infectologia" and area_da_cid("A90") == "Infectologia"
+    print("OK: CID → área, portaria, seção de CIDs, dificuldade e manuais.")

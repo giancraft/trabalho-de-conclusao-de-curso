@@ -1,7 +1,8 @@
 """Recuperação no corpus — a superfície que `casos/router.py` consome (RF04).
 
-- sortear_fonte():   a condição sai do corpus (RN01): PCDT ou relato de caso, sem repetir
-                     para o mesmo estudante até esgotar o balde
+- sortear_fonte():   a condição sai do corpus (RN01): PCDT, manual do MS ou relato, sorteados
+                     pelo peso (relevância) e sem repetir para o mesmo estudante até
+                     esgotar a área
 - fontes_de_apoio(): PCDT/diretriz ligados à condição por conceito MeSH exato
                      (`rag/apoio.py`) — é o que puxa a diretriz para junto do relato
 - material():        os trechos de uma fonte para uma etapa (geração ou feedback)
@@ -13,6 +14,7 @@
     python -m rag.busca "dor torácica em aperto..."   # consulta real no corpus ingerido
 """
 
+import random
 from functools import cache
 
 from sqlalchemy import func, text
@@ -36,19 +38,35 @@ CONSULTA = {
 TRECHOS_POR_SECAO = 5  # PCDT: ~400 palavras por seção
 TRECHOS_PRINCIPAL = 8  # artigo sorteado
 TRECHOS_APOIO = 4  # cada fonte de apoio — o total cabe no limite de tokens/min da Groq
+# Internato cobra a conduta com doses: os primeiros trechos de "Tratamento" costumam ser a
+# parte geral, então o feedback leva também os mais próximos de posologia.
+CONSULTA_DOSES = (
+    "esquema de administração, posologia, dose, via de administração, diluição, volume, "
+    "velocidade de infusão, duração do tratamento"
+)
+TRECHOS_DOSES = 6
+# Fração dos sorteios que sai de relato de caso. São 2.940 relatos contra 141 PCDT: só com
+# peso, os relatos somados levariam mais da metade dos casos — e relato é publicado por
+# ser atípico. Primeiro decide o grupo, depois sorteia pelo peso dentro dele.
+PROB_RELATO = 0.15
 APOIO = 2
 
 
 
 async def sortear_fonte(
-    s: AsyncSession, especialidade: str, dificuldade: str, usuario_id: int | None = None
+    s: AsyncSession, especialidade: str, usuario_id: int | None = None, relato: bool | None = None
 ) -> FonteReferencia | None:
-    """Fonte sorteável do balde (especialidade × dificuldade).
+    """Fonte sorteável da especialidade, com chance proporcional ao `peso`.
 
-    Ordena pelo número de vezes que este estudante já recebeu a fonte e só então ao
-    acaso: o balde inteiro passa antes de qualquer repetição. Balde vazio (Geriatria ×
-    básico) cai para a especialidade inteira — o prompt continua modulando o nível.
+    O ciclo do caso não entra aqui: ele muda o que se cobra, não a doença. Ordena primeiro
+    pelo número de vezes que este estudante já recebeu a fonte — a área inteira passa
+    antes de qualquer repetição — e, entre as menos vistas, sorteia pelo peso: a chave
+    -ln(1 - u)/peso (Efraimidis–Spirakis) dá a cada fonte chance proporcional ao peso, em
+    uma linha de SQL. `relato` escolhe o grupo (padrão: relato em PROB_RELATO dos casos);
+    grupo vazio cai para a área inteira.
     """
+    if relato is None:
+        relato = random.random() < PROB_RELATO
     vistos = (
         select(CasoFonte.fonte_id, func.count().label("n"))
         .join(CasoClinico, CasoClinico.id == CasoFonte.caso_id)
@@ -56,16 +74,22 @@ async def sortear_fonte(
         .group_by(CasoFonte.fonte_id)
         .subquery()
     )
-    base = (
+    vezes = func.coalesce(vistos.c.n, 0)
+    da_area = (
         select(FonteReferencia)
         .outerjoin(vistos, vistos.c.fonte_id == FonteReferencia.id)
         .where(FonteReferencia.sorteavel, FonteReferencia.especialidade == especialidade)
-        .order_by(func.coalesce(vistos.c.n, 0), func.random())
-        .limit(1)
     )
-    return (
-        await s.execute(base.where(FonteReferencia.dificuldade == dificuldade))
-    ).scalar_one_or_none() or (await s.execute(base)).scalar_one_or_none()
+    # 1 - random() ∈ (0, 1]: ln(0) daria erro no Postgres.
+    base = da_area.order_by(vezes, -func.ln(1 - func.random()) / FonteReferencia.peso).limit(1)
+    # O grupo só vale entre as menos vistas da área: com o único relato já visto, sai um
+    # PCDT ainda inédito em vez de repetir o relato.
+    menos_vistas = da_area.with_only_columns(func.min(vezes)).scalar_subquery()
+    eh_relato = FonteReferencia.tipo == "Relato de caso"
+    grupo = (eh_relato if relato else ~eh_relato) & (vezes == menos_vistas)
+    return (await s.execute(base.where(grupo))).scalar_one_or_none() or (
+        await s.execute(base)
+    ).scalar_one_or_none()
 
 
 @cache
@@ -133,12 +157,22 @@ async def trechos_relevantes(s: AsyncSession, fonte_id: int, consulta: str, k: i
     return sorted(trechos, key=lambda t: t.ordem)
 
 
-async def material(s: AsyncSession, fonte: FonteReferencia, etapa: str, principal: bool = True) -> list[Trecho]:
+async def material(
+    s: AsyncSession, fonte: FonteReferencia, etapa: str, principal: bool = True, ciclo: str = ""
+) -> list[Trecho]:
     """Trechos de uma fonte para uma etapa ("caso" ou "feedback")."""
-    if fonte.tipo == "PCDT":
-        secoes = SECOES_CASO if etapa == "caso" else SECOES_FEEDBACK
-        return await trechos_da_fonte(s, fonte.id, secoes, TRECHOS_POR_SECAO if principal else 2)
     k = TRECHOS_PRINCIPAL if principal else TRECHOS_APOIO
+    if fonte.tipo in ("PCDT", "Manual MS"):
+        if fonte.tipo == "PCDT":
+            secoes = SECOES_CASO if etapa == "caso" else SECOES_FEEDBACK
+            trechos = await trechos_da_fonte(s, fonte.id, secoes, TRECHOS_POR_SECAO if principal else 2)
+        else:  # manual: capítulos com nomes livres, então o kNN acha o que serve
+            trechos = await trechos_relevantes(s, fonte.id, CONSULTA[etapa], k)
+        if etapa == "feedback" and ciclo == "internato":
+            k = TRECHOS_DOSES if principal else TRECHOS_DOSES // 2
+            doses = await trechos_relevantes(s, fonte.id, CONSULTA_DOSES, k)
+            trechos = sorted({t.id: t for t in trechos + doses}.values(), key=lambda t: t.ordem)
+        return trechos
     if fonte.tipo == "Relato de caso" and etapa == "caso":
         if trechos := await trechos_da_fonte(s, fonte.id, SECOES_RELATO, k):
             return trechos
@@ -200,9 +234,9 @@ if __name__ == "__main__":
         async with sessao_descartavel() as s:
             comum = dict(orgao="MS", url="u", licenca="l", publicado_em=None, cid10=[])
             iam = FonteReferencia(chave="iam", tipo="PCDT", identificador="P1", titulo="Infarto agudo do miocárdio",
-                                  especialidade="Cardiologia", dificuldade="básico", **comum)
+                                  especialidade="Cardiologia", dificuldade="básico", peso=9, **comum)
             fa = FonteReferencia(chave="fa", tipo="PCDT", identificador="P2", titulo="Fibrilação atrial",
-                                 especialidade="Cardiologia", dificuldade="intermediário", **comum)
+                                 especialidade="Cardiologia", dificuldade="intermediário", peso=1, **comum)
             relato = FonteReferencia(chave="PMC1", tipo="Relato de caso", identificador="PMCID PMC1",
                                      titulo="Kounis syndrome", especialidade="Cardiologia", dificuldade="avançado", **comum)
             diretriz = FonteReferencia(chave="PMC2", tipo="Diretriz", identificador="PMCID PMC2", sorteavel=False,
@@ -227,12 +261,15 @@ if __name__ == "__main__":
             ])
             await s.commit()
 
-            # Sorteio: só sorteáveis do balde; apoio nunca sai.
+            # Sorteio: só sorteáveis da área; apoio nunca sai; o grupo (relato ou não) manda.
             for _ in range(5):
-                assert (await sortear_fonte(s, "Cardiologia", "básico")).chave == "iam"
-                assert (await sortear_fonte(s, "Cardiologia", "avançado")).chave == "PMC1"
-            assert await sortear_fonte(s, "Dermatologia", "básico") is None, "revisão não é sorteável"
-            assert await sortear_fonte(s, "Pediatria", "básico") is None, "sem corpus → None"
+                assert (await sortear_fonte(s, "Cardiologia", relato=True)).chave == "PMC1"
+                assert (await sortear_fonte(s, "Cardiologia", relato=False)).chave in {"iam", "fa"}
+            assert await sortear_fonte(s, "Dermatologia") is None, "revisão não é sorteável"
+            assert await sortear_fonte(s, "Pediatria") is None, "sem corpus → None"
+            # Peso: IAM (9) sai ~9x mais que FA (1). Em 400 sorteios, esperado ~360 x 40.
+            n_iam = sum([(await sortear_fonte(s, "Cardiologia", relato=False)).chave == "iam" for _ in range(400)])
+            assert 320 < n_iam < 395, n_iam
 
             # Sem repetição: com as 3 sorteáveis da área já vistas uma vez cada, exceto
             # uma, o próximo sorteio (balde vazio → área inteira) traz a que falta.
@@ -240,13 +277,15 @@ if __name__ == "__main__":
             uid = (await s.execute(select(Usuario.id))).scalar_one()
             for i, f in enumerate([iam, relato]):
                 s.add(CasoClinico(id=f"c{i}", usuario_id=uid, titulo="t", especialidade="Cardiologia",
-                                  dificuldade="básico", gabarito={}))
+                                  ciclo="básico", gabarito={}))
                 await s.flush()
                 s.add(CasoFonte(caso_id=f"c{i}", fonte_id=f.id, etapa="caso", numero=1, trechos=[]))
             await s.commit()
             for _ in range(5):
-                assert (await sortear_fonte(s, "Cardiologia", "inexistente", uid)).chave == "fa", "a não vista vem antes"
-            assert (await sortear_fonte(s, "Cardiologia", "básico", uid)).chave == "iam", "balde de um só: repete"
+                assert (await sortear_fonte(s, "Cardiologia", uid, relato=False)).chave == "fa", "a não vista vem antes"
+                assert (await sortear_fonte(s, "Cardiologia", uid, relato=True)).chave == "fa", (
+                    "relato já visto: a não vista de outro grupo ganha"
+                )
 
             # Seções do PCDT e material por tipo de fonte.
             ts = await trechos_da_fonte(s, iam.id, SECOES_CASO)
@@ -272,6 +311,22 @@ if __name__ == "__main__":
             embedar = falso
             # Dentro do relato, o trecho mais próximo de (7) é "rc".
             assert [t.texto for t in await trechos_relevantes(s, relato.id, "x", 1)] == ["rc"]
+            # Internato: o feedback soma os trechos mais próximos de posologia, sem duplicar.
+            # O IAM tem 5 trechos e o kNN pede 6: entra a Introdução ("e"), sem repetir os da
+            # seção e na ordem do documento.
+            internato = [t.texto for t in await material(s, iam, "feedback", ciclo="internato")]
+            assert internato == ["e", "h1", "h2", "ev", "tx"], internato
+            # Manual do MS: capítulos de nome livre — o material vem do kNN, não de seção.
+            manual = FonteReferencia(chave="tb", tipo="Manual MS", identificador="ISBN", titulo="Tuberculose",
+                                     especialidade="Infectologia", dificuldade="básico", **comum)
+            s.add(manual)
+            await s.flush()
+            s.add_all([
+                Trecho(fonte_id=manual.id, ordem=0, secao="Espectro clínico", texto="m0", embedding=eixo((7, 1))),
+                Trecho(fonte_id=manual.id, ordem=1, secao="Adesão", texto="m1", embedding=eixo((11, 1))),
+            ])
+            await s.commit()
+            assert [t.texto for t in await material(s, manual, "caso", principal=False)] == ["m0", "m1"]
             # Apoio: vem das ligações gravadas, na ordem delas; chave que não está no banco
             # (fonte descartada depois) some sem quebrar.
             ligacoes = {"PMC1": [{"chave": "iam"}, {"chave": "sumiu"}, {"chave": "PMC2"}]}
@@ -279,6 +334,6 @@ if __name__ == "__main__":
             assert await fontes_de_apoio(s, fa, ligacoes) == [], "sem ligação, sem apoio"
             achados = await buscar(s, "qualquer", k=2)
             assert [(t.texto, f.chave) for t, f in achados] == [("dr", "PMC2"), ("h1", "iam")]
-        print("OK: sorteio sem repetição, apoio por autoridade, material por tipo, contexto numerado e kNN.")
+        print("OK: sorteio ponderado sem repetição, apoio por autoridade, material por tipo e ciclo, contexto e kNN.")
 
     asyncio.run(consultar(sys.argv[1]) if len(sys.argv) > 1 else selfcheck())

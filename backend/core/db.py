@@ -99,7 +99,7 @@ async def criar_caso(
     usuario_id: int,
     titulo: str,
     especialidade: str,
-    dificuldade: str,
+    ciclo: str,
     gabarito: dict,
     fontes: list[UsoFonte] = (),
 ) -> str:
@@ -109,7 +109,7 @@ async def criar_caso(
         usuario_id=usuario_id,
         titulo=titulo,
         especialidade=especialidade,
-        dificuldade=dificuldade,
+        ciclo=ciclo,
         gabarito=gabarito,
     )
     s.add(caso)

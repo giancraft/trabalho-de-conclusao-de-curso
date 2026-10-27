@@ -1,0 +1,50 @@
+{
+  "_sobre": "Manuais do Ministério da Saúde para temas comuns sem PCDT (rag/catalogo.py, tipo 'Manual MS'). Curadoria humana versionada (RN05): só publicação oficial do MS hospedada em gov.br/saude, na edição vigente mais recente. Cada linha diz a condição sorteada (titulo = diagnóstico do caso), as CIDs que a classificam pela mesma regra do PCDT, os dados da ficha catalográfica para a referência ABNT e a licença declarada na própria obra. publicado_em é a data de criação do PDF (metadado), já que a ficha só traz o ano. fonte_titulo é o corpo de fonte (pt) a partir do qual uma linha é título de capítulo — medido em cada PDF (rag/ingestao.py, secoes_manual). capitulos (opcional) são os prefixos dos capítulos clínicos que entram: o manual de TB tem metade do volume em gestão do programa (adesão, sistemas de informação, redes), que o kNN puxava para o caso. Sem fonte oficial vigente do MS em PDF (out/2026): sepse, pneumonia, ITU fora da gestação e depressão; o Manual de Gestação de Alto Risco (2022, pré-eclâmpsia e ITU na gestação) só está na BVS-MS, que recusa download automatizado.",
+  "manuais": [
+    {
+      "chave": "manual-de-recomendacoes-para-o-controle-da-tuberculose",
+      "titulo": "Tuberculose",
+      "url": "https://www.gov.br/saude/pt-br/centrais-de-conteudo/publicacoes/svsa/tuberculose/manual-de-recomendacoes-e-controle-da-tuberculose-no-brasil-2a-ed.pdf/view",
+      "cid10": ["A15", "A16", "A17", "A18", "A19"],
+      "publicado_em": "2019-05-08",
+      "identificador": "ISBN 978-85-334-2696-2",
+      "licenca": "CC BY-NC-SA 4.0 — reprodução parcial ou total permitida, citada a fonte (ficha da obra)",
+      "fonte_titulo": 17.0,
+      "capitulos": [
+        "Tuberculose – Características Gerais", "Diagnóstico", "Bases Bacteriológicas", "A Escolha do Melhor Esquema",
+        "Esquemas de Tratamento", "Seguimento do Tratamento", "Reações Adversas", "Tratamento da Tuberculose Drogarresistente",
+        "Tratamento da Infecção Latente"
+      ],
+      "bibliografia": {
+        "autor": "Ministério da Saúde. Secretaria de Vigilância em Saúde. Departamento de Vigilância das Doenças Transmissíveis",
+        "obra": "Manual de recomendações para o controle da tuberculose no Brasil",
+        "subtitulo": "",
+        "edicao": "2. ed. atual.",
+        "local": "Brasília",
+        "editora": "Ministério da Saúde",
+        "ano": "2019",
+        "paginas": "364 p."
+      }
+    },
+    {
+      "chave": "dengue-diagnostico-e-manejo-clinico-adulto-e-crianca",
+      "titulo": "Dengue",
+      "url": "https://www.gov.br/saude/pt-br/centrais-de-conteudo/publicacoes/svsa/dengue/dengue-diagnostico-e-manejo-clinico-adulto-e-crianca/view",
+      "cid10": ["A90", "A91"],
+      "publicado_em": "2024-02-20",
+      "identificador": "ISBN 978-65-5993-577-2",
+      "licenca": "CC BY-NC-SA 4.0 — reprodução parcial ou total permitida, citada a fonte (ficha da obra)",
+      "fonte_titulo": 16.5,
+      "bibliografia": {
+        "autor": "Ministério da Saúde. Secretaria de Vigilância em Saúde e Ambiente. Departamento de Doenças Transmissíveis",
+        "obra": "Dengue",
+        "subtitulo": "diagnóstico e manejo clínico: adulto e criança",
+        "edicao": "6. ed.",
+        "local": "Brasília",
+        "editora": "Ministério da Saúde",
+        "ano": "2024",
+        "paginas": "81 p."
+      }
+    }
+  ]
+}

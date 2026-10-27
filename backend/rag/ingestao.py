@@ -4,20 +4,24 @@
     python -m rag.ingestao --check    # self-check do seccionamento e do fatiamento, sem banco
 
 Duas origens, um formato de trecho:
-- PCDT: `rag/corpus/<chave>.pdf`, aprovado no `corpus.json` (especialidade e dificuldade);
+- PCDT e manual do MS: `rag/corpus/<chave>.pdf`, aprovado no `corpus.json` (especialidade e
+  dificuldade); o manual é seccionado pelo corpo da fonte dos capítulos;
 - artigo: `rag/corpus/pmc/<PMCID>.xml` (JATS), aprovado no `literatura.json` (com área).
 
-Rodar de novo pula o que já está no banco e sincroniza especialidade, dificuldade e papel
-com os JSONs — é assim que uma correção da curadoria (RN05) chega ao sorteio.
+Rodar de novo pula o que já está no banco e sincroniza especialidade, dificuldade, papel e
+peso com os JSONs — é assim que uma correção da curadoria (RN05) chega ao sorteio.
 """
 
 import asyncio
 import collections
+import json
+import math
 import re
 import sys
 import time
 import xml.etree.ElementTree as ET
 from datetime import date
+from pathlib import Path
 
 from sqlmodel import select, update
 
@@ -106,6 +110,54 @@ def secoes(linhas: list[str]) -> list[tuple[str, list[str]]]:
     return [(t, _paragrafos(ls)) for t, ls in saida.items() if ls]
 
 
+# Capítulo de manual: começa com número ("1 Introdução", "2. Diagnóstico Diferencial").
+_NUMERADO = re.compile(r"^\d{1,2}(\.\d+)*\.?(\s|$)")
+
+
+def linhas_por_fonte(pdf, tamanho: float) -> list[tuple[str, bool]]:
+    """(linha, é título) em ordem de leitura; título é a linha com fonte ≥ `tamanho` pt.
+
+    Manual do MS não tem os títulos em caixa alta do PCDT: cada um tem a sua diagramação,
+    e o que separa capítulo de texto é o corpo da fonte (curado por manual, `fonte_titulo`
+    em `manuais.json`).
+    """
+    import pymupdf
+
+    with pymupdf.open(pdf) as doc:
+        linhas = [
+            (" ".join("".join(s["text"] for s in l["spans"]).split()), max(s["size"] for s in l["spans"]) >= tamanho)
+            for pag in doc for b in pag.get_text("dict")["blocks"] for l in b.get("lines", []) if l["spans"]
+        ]
+    frequencia = collections.Counter(t for t, _ in linhas)
+    return [(t, e) for t, e in linhas if t and frequencia[t] < _REPETIDA]
+
+
+def secoes_manual(linhas: list[tuple[str, bool]]) -> list[tuple[str, list[str]]]:
+    """(capítulo, parágrafos) de um manual: só os capítulos numerados.
+
+    Título sem número (capa, sumário, apresentação, referências, apêndices, "PARTE II")
+    fecha o capítulo anterior e não abre outro: é assim que capa, ficha catalográfica e
+    sumário ficam de fora sem lista de nomes. Linhas de título seguidas se juntam ("4
+    Atendimento ao paciente com suspeita" + "de dengue"); uma linha numerada recomeça.
+    """
+    saida: dict[str, list[str]] = {}
+    atual, titulo = None, []
+    for texto, eh_titulo in linhas:
+        if eh_titulo:
+            titulo = [texto] if _NUMERADO.match(texto) or not titulo else titulo + [texto]
+            continue
+        if titulo:
+            nome = " ".join(titulo)
+            atual = None
+            if _NUMERADO.match(nome) and (nome := _NUMERADO.sub("", nome).strip()):
+                nome = nome.capitalize() if nome.isupper() else nome
+                atual = saida.setdefault(nome, [])
+            titulo = []
+        if atual is not None and not _NUMERO.match(texto):
+            atual.append(texto)
+    return [(t, _paragrafos(ls)) for t, ls in saida.items() if ls]
+
+
 # Seções de artigo sem conteúdo clínico.
 _IGNORADAS_JATS = re.compile(
     r"acknowledg|agradec|funding|financ|conflict|conflito|author.{0,5}contrib|contribui|"
@@ -179,6 +231,24 @@ def fatiar(paragrafos: list[str], limite: int = PALAVRAS, minimo: int = MINIMO) 
     return fatias
 
 
+# Temas comuns da prática e de prova de residência (curadoria humana, RN05).
+RESIDENCIA = json.loads((Path(__file__).parent / "residencia.json").read_text())
+
+
+def peso(r: dict) -> float:
+    """Peso no sorteio (rag/busca.py): o que é comum na prática e em prova sai mais.
+
+    Regra, sem LLM: PCDT e manual do MS pesam 1 + log10(1 + internações/ano no SIH/SUS), +3 se for tema
+    de residência (HAS ≈ 9,3; PCDT raro ≈ 1). Relato de caso é publicado por ser atípico:
+    0,3, ou 1 quando a doença de base (MeSH) é um tema comum — TB, dengue, sepse...
+    """
+    if r["tipo"] == "Relato de caso":
+        comum = any(m.startswith(t) for m in r.get("mesh", []) for t in RESIDENCIA["mesh_relatos"])
+        return 1.0 if comum else 0.3
+    bonus = 3 if r["chave"] in RESIDENCIA["pcdt"] else 0
+    return round(1 + math.log10(1 + (r.get("internacoes_ano") or 0)) + bonus, 2)
+
+
 def _documentos() -> list[tuple[dict, dict, callable]]:
     """(linha do catálogo, campos da FonteReferencia, leitor de seções) de cada documento.
 
@@ -189,11 +259,18 @@ def _documentos() -> list[tuple[dict, dict, callable]]:
     for r in carregar():
         if r["especialidade"] and r["dificuldade"]:
             campos = dict(
-                orgao=r["orgao"], identificador=r["identificador"], licenca=LICENCA,
-                cid10=r["cid10"], bibliografia=None, sorteavel=True,
+                orgao=r["orgao"], identificador=r["identificador"], licenca=r.get("licenca", LICENCA),
+                cid10=r["cid10"], bibliografia=r.get("bibliografia"), sorteavel=True,
             )
             pdf = CORPUS_DIR / f"{r['chave']}.pdf"
-            docs.append((r, campos, lambda pdf=pdf: [(t, None, ps) for t, ps in secoes(linhas_pdf(pdf))]))
+            if r["tipo"] == "Manual MS":
+                ler = lambda pdf=pdf, r=r: [
+                    (t, ps) for t, ps in secoes_manual(linhas_por_fonte(pdf, r["fonte_titulo"]))
+                    if t.startswith(tuple(r.get("capitulos") or [""]))
+                ]
+            else:
+                ler = lambda pdf=pdf: secoes(linhas_pdf(pdf))
+            docs.append((r, campos, lambda ler=ler: [(t, None, ps) for t, ps in ler()]))
     for r in literatura.carregar():
         if r["especialidade"]:  # apoio sem área não tem como ser achado pela área
             campos = dict(
@@ -231,6 +308,7 @@ async def ingerir() -> None:
                     especialidade=r["especialidade"] or "",
                     dificuldade=r["dificuldade"] or "",
                     sorteavel=r.get("sorteavel", True) and bool(r["especialidade"]),
+                    peso=peso(r),
                 )
             )
         await s.commit()
@@ -252,6 +330,7 @@ async def ingerir() -> None:
                 url=r["url"],
                 especialidade=r["especialidade"],
                 dificuldade=r["dificuldade"] or "",
+                peso=peso(r),
                 **campos,
             )
             s.add(fonte)
@@ -341,4 +420,30 @@ if __name__ == "__main__":
     assert fatiar(["Imaging", "a b c d"], limite=4, minimo=2) == ["Imaging a b c d"]
     assert fatiar([longo], limite=4, minimo=3) == ["0 1 2 3", "4 5 6 7 8 9"]
     assert fatiar(["x"], minimo=5) == ["x"], "capítulo minúsculo ainda gera um trecho"
-    print("OK: seções do PCDT e do JATS e fatiamento por parágrafo.")
+
+    # Peso do sorteio: relevância pela regra, sem LLM.
+    has = {"tipo": "PCDT", "chave": "hipertensao-arterial-sistemica", "internacoes_ano": 181771}
+    raro = {"tipo": "PCDT", "chave": "x", "internacoes_ano": 0}
+    assert 9 < peso(has) < 10 and peso(raro) == 1.0, (peso(has), peso(raro))
+    assert peso({"tipo": "Relato de caso", "mesh": ["Tuberculosis, Pulmonary"]}) == 1.0, "tema comum"
+    assert peso({"tipo": "Relato de caso", "mesh": ["Kounis Syndrome"]}) == 0.3
+    assert all(c in {r["chave"] for r in carregar()} for c in RESIDENCIA["pcdt"]), "chave de PCDT inexistente"
+
+    # Manual: capítulo é a linha em fonte grande e numerada. Capa, ficha e sumário (títulos
+    # sem número) ficam fora; título em duas linhas se junta; parte + capítulo seguidos
+    # valem pelo capítulo.
+    manual = [
+        ("DENGUE", True), ("Ficha catalográfica.", False),
+        ("Sumário", True), ("1 Introdução | 9", False),
+        ("1", True), ("Introdução", True), ("A dengue é", False), ("endêmica.", False), ("9", False),
+        ("4 Atendimento ao paciente com suspeita", True), ("de dengue", True), ("Anamnese.", False),
+        ("PARTE II", True), ("DIAGNÓSTICO", True), ("1. DIAGNÓSTICO CLÍNICO", True), ("Tosse.", False),
+        ("Referências", True), ("BRASIL. Ministério.", False),
+    ]
+    assert secoes_manual(manual) == [
+        ("Introdução", ["A dengue é endêmica."]),
+        ("Atendimento ao paciente com suspeita de dengue", ["Anamnese."]),
+        ("Diagnóstico clínico", ["Tosse."]),
+    ], secoes_manual(manual)
+    assert peso({"tipo": "Manual MS", "chave": "x", "internacoes_ano": 0}) == 1.0
+    print("OK: seções do PCDT, do manual e do JATS, fatiamento por parágrafo e peso do sorteio.")

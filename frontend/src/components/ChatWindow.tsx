@@ -39,9 +39,9 @@ export default function ChatWindow({
           Bem-vindo ao Simulador Clínico
         </h2>
         <p className="mb-6 max-w-md text-sm leading-relaxed text-zinc-500">
-          Escolha uma especialidade e uma dificuldade na barra lateral e inicie um novo caso.
-          Você conduzirá a investigação — anamnese, exame físico e exames — sem conhecer o
-          diagnóstico, e receberá feedback ao final.
+          Escolha uma especialidade e o seu ciclo do curso na barra lateral e inicie um novo
+          caso. Você conduzirá a investigação — anamnese, exame físico, exames e conduta — sem
+          conhecer o diagnóstico, e receberá feedback ao final, no nível do seu ciclo.
         </p>
         <button
           onClick={onNovoCaso}

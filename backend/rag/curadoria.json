@@ -11,5 +11,6 @@
   "fratura-do-colo-do-femur-em-idosos-tratamento-diretrizes-brasileiras": {"cid10": ["S72.0"], "nota": "sem seção de CID; S72.0 = fratura do colo do fêmur"},
   "pessoas-com-deficiencia-auditiva-linha-de-cuidado": {"cid10": ["H90"], "nota": "linha de cuidado sem seção de CID; H90 = perda de audição"},
   "manejo-da-infeccao-pelo-hiv-em-adultos-modulo-1": {"cid10": ["B24"], "nota": "sem seção de CID; B24 = doença pelo HIV; o módulo 1 cobre diagnóstico e manejo inicial"},
-  "PMC9134146": {"descartar": true, "nota": "relato veterinário (gato FeLV-positivo); o MeSH marca Humans por ser zoonose"}
+  "PMC9134146": {"descartar": true, "nota": "relato veterinário (gato FeLV-positivo); o MeSH marca Humans por ser zoonose"},
+  "mucopolissacaridose-do-tipo-i": {"cid10": ["E76.0"], "nota": "CIDs extraídos (I37, I23, I77) eram complicações cardíacas citadas no texto e levavam o PCDT para Cardiologia com internações que não são da MPS I; E76.0 = mucopolissacaridose do tipo I"}
 }

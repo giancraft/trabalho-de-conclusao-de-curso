@@ -5,7 +5,7 @@ import ChatWindow from './components/ChatWindow'
 import Composer from './components/Composer'
 import AuthPage from './components/AuthPage'
 import * as api from './api'
-import type { ConversaResumo, Feedback, Fonte, Mensagem, Opcoes, Usuario } from './types'
+import type { ConversaResumo, Feedback, Fonte, Mensagem, Opcoes, RespostaFinal, Usuario } from './types'
 
 export default function App() {
   const [usuario, setUsuario] = useState<Usuario | null>(null)
@@ -13,11 +13,12 @@ export default function App() {
 
   const [opcoes, setOpcoes] = useState<Opcoes | null>(null)
   const [especialidade, setEspecialidade] = useState('Cardiologia')
-  const [dificuldade, setDificuldade] = useState('intermediário')
+  const [ciclo, setCiclo] = useState('clínico')
 
   const [conversas, setConversas] = useState<ConversaResumo[]>([])
   const [casoId, setCasoId] = useState<string | null>(null)
   const [casoAberto, setCasoAberto] = useState(false) // status da conversa ativa
+  const [casoCiclo, setCasoCiclo] = useState('clínico') // ciclo do caso ativo: campos da entrega
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [feedback, setFeedback] = useState<Feedback | null>(null)
   const [fontes, setFontes] = useState<Fonte[]>([])
@@ -62,8 +63,9 @@ export default function App() {
     setOcupado(true)
     setDigitando(true)
     try {
-      const caso = await api.criarCaso(especialidade, dificuldade)
+      const caso = await api.criarCaso(especialidade, ciclo)
       setCasoId(caso.caso_id)
+      setCasoCiclo(caso.ciclo)
       setCasoAberto(true)
       setMensagens([{ role: 'assistant', content: caso.apresentacao }])
       atualizarConversas()
@@ -81,6 +83,7 @@ export default function App() {
     try {
       const conversa = await api.carregarConversa(id)
       setCasoId(conversa.id)
+      setCasoCiclo(conversa.ciclo)
       setCasoAberto(conversa.status === 'aberta')
       setMensagens(conversa.mensagens)
       setFeedback(conversa.feedback)
@@ -138,17 +141,14 @@ export default function App() {
     }
   }
 
-  async function darDiagnostico(texto: string) {
+  async function darDiagnostico(resposta: RespostaFinal, texto: string) {
     if (!casoId) return
     setOcupado(true)
     setErro(null)
-    setMensagens((atual) => [
-      ...atual,
-      { role: 'user', content: `Diagnóstico final: ${texto}` },
-    ])
+    setMensagens((atual) => [...atual, { role: 'user', content: texto }])
     setDigitando(true)
     try {
-      setFeedback(await api.enviarDiagnostico(casoId, texto))
+      setFeedback(await api.enviarDiagnostico(casoId, resposta))
       setCasoAberto(false)
       atualizarConversas()
       // As fontes só saem da API com o caso encerrado (o título do capítulo é o
@@ -173,7 +173,7 @@ export default function App() {
       <Sidebar
         opcoes={opcoes}
         especialidade={especialidade}
-        dificuldade={dificuldade}
+        ciclo={ciclo}
         ocupado={ocupado}
         aberta={menuAberto}
         usuario={usuario}
@@ -181,7 +181,7 @@ export default function App() {
         conversaAtivaId={casoId}
         onFechar={() => setMenuAberto(false)}
         onEspecialidade={setEspecialidade}
-        onDificuldade={setDificuldade}
+        onCiclo={setCiclo}
         onNovoCaso={novoCaso}
         onAbrirConversa={abrirConversa}
         onApagarConversa={apagarConversa}
@@ -209,7 +209,12 @@ export default function App() {
           onNovoCaso={novoCaso}
         />
         {casoId && casoAberto && !feedback && (
-          <Composer ocupado={ocupado} onMensagem={enviarMensagem} onDiagnostico={darDiagnostico} />
+          <Composer
+            ocupado={ocupado}
+            ciclo={casoCiclo}
+            onMensagem={enviarMensagem}
+            onDiagnostico={darDiagnostico}
+          />
         )}
       </main>
     </div>

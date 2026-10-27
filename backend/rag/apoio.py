@@ -41,7 +41,7 @@ CID10CM = "https://www.cms.gov/files/zip/2026-code-descriptions-tabular-order.zi
 NIVEIS = 1  # o apoio pode ser o pai direto do descritor da condição, não o avô
 PROFUNDIDADE = 3  # níveis mínimos do descritor que liga: C14 e C14.907 são amplos demais
 MAX_APOIO = 2
-PRIORIDADE = {"PCDT": 0, "Diretriz": 1}
+PRIORIDADE = {"PCDT": 0, "Manual MS": 0, "Diretriz": 1}
 COBERTURA = 0.5  # fração mínima das palavras do título da CID explicada pelos rótulos MeSH
 _VAZIAS = {"and", "or", "of", "with", "without", "in", "the", "a", "an", "to", "due", "other",
            "unspecified", "specified", "type", "not", "elsewhere", "classified", "by", "as", "on"}
@@ -138,7 +138,7 @@ def gerar() -> None:
     indice = literatura.indice_doencas(arvores)
     titulos = titulos_cid()
     pcdt = [
-        {"chave": r["chave"], "tipo": "PCDT", "titulo": r["titulo"], "ano": (r["publicado_em"] or "0")[:4],
+        {"chave": r["chave"], "tipo": r["tipo"], "titulo": r["titulo"], "ano": (r["publicado_em"] or "0")[:4],
          "mesh": mesh_do_pcdt(r["cid10"], titulos, indice)}
         for r in catalogo.carregar() if r["especialidade"] and r["dificuldade"]
     ]

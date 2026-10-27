@@ -30,7 +30,7 @@ from models import (
     Usuario,
 )
 from rag import busca
-from rag.citacao import citacao_abnt, url_secao
+from rag.citacao import citacao_abnt, leitura_fisiologia, url_secao
 
 router = APIRouter(prefix="/api", tags=["casos"])
 
@@ -55,15 +55,24 @@ def _falha_ia(e: Exception, acao: str) -> str:
 
 class NovoCaso(BaseModel):
     especialidade: str
-    dificuldade: str
+    ciclo: str
 
 
 class Mensagem(BaseModel):
     mensagem: str
 
 
-class Diagnostico(BaseModel):
+class RespostaFinal(BaseModel):
+    """Entrega final do caso; os campos obrigatórios dependem do ciclo (ai.CAMPOS_POR_CICLO)."""
+
     diagnostico: str
+    fisiologia: str = ""
+    fisiopatologia: str = ""
+    conduta: str = ""
+
+
+# Linha acrescentada à abertura quando a condição sorteada vem de relato de caso.
+AVISO_RELATO = "*Caso baseado em relato publicado: a apresentação pode ser menos típica.*"
 
 
 async def _caso_do_usuario(
@@ -140,7 +149,7 @@ async def _referencias(s: AsyncSession, caso_id: str) -> list[FonteLeitura]:
 
 @router.get("/especialidades", response_model=Opcoes)
 async def especialidades():
-    return Opcoes(especialidades=ai.ESPECIALIDADES, dificuldades=ai.DIFICULDADES)
+    return Opcoes(especialidades=ai.ESPECIALIDADES, ciclos=ai.CICLOS)
 
 
 @router.get("/conversas", response_model=ListaCasos)
@@ -168,6 +177,7 @@ async def abrir(
         id=caso.id,
         titulo=caso.titulo,
         especialidade=caso.especialidade,
+        ciclo=caso.ciclo,
         status=caso.status,
         mensagens=_historico(respostas),
         feedback=caso.feedback,
@@ -193,14 +203,16 @@ async def criar_caso(
 ):
     if corpo.especialidade not in ai.ESPECIALIDADES:
         raise HTTPException(422, f"Especialidade inválida: {corpo.especialidade}")
-    if corpo.dificuldade not in ai.DIFICULDADES:
-        raise HTTPException(422, f"Dificuldade inválida: {corpo.dificuldade}")
+    if corpo.ciclo not in ai.CICLOS:
+        raise HTTPException(422, f"Ciclo inválido: {corpo.ciclo}")
     # A condição sai do corpus antes de o LLM escrever qualquer coisa (RN01): PCDT ou
-    # relato de caso, sem repetir para este estudante. Junto vêm as fontes de apoio —
+    # relato de caso, pelo peso de relevância e sem repetir para este estudante — o ciclo
+    # não entra no sorteio, só no que se cobra. Junto vêm as fontes de apoio —
     # o PCDT ou a diretriz brasileira mais próximos —, numeradas [1], [2]... (RF04).
     # Corpus vazio → nenhuma fonte → caso sem ancoragem: o sistema degrada, não quebra.
     blocos = []
-    fonte = await busca.sortear_fonte(s, corpo.especialidade, corpo.dificuldade, usuario.id)
+    fonte = await busca.sortear_fonte(s, corpo.especialidade, usuario.id)
+    relato = bool(fonte) and fonte.tipo == "Relato de caso"
     if fonte:
         blocos.append((fonte, await busca.material(s, fonte, "caso")))
         for apoio in await busca.fontes_de_apoio(s, fonte):
@@ -210,9 +222,10 @@ async def criar_caso(
     try:
         caso = await ai.novo_caso(
             corpo.especialidade,
-            corpo.dificuldade,
+            corpo.ciclo,
             fonte.titulo if fonte else "",
             busca.contexto(numerados),
+            relato=relato,
         )
     except Exception as e:  # noqa: BLE001 — erro amigável, sem stack trace no cliente
         raise HTTPException(502, _falha_ia(e, "gerar o caso"))
@@ -222,12 +235,13 @@ async def criar_caso(
         usuario.id,
         caso.titulo,
         corpo.especialidade,
-        corpo.dificuldade,
+        corpo.ciclo,
         caso.gabarito.model_dump(),
         fontes=[(f.id, n, [t.id for t in ts]) for n, f, ts in numerados],
     )
-    await db.adicionar_resposta(s, caso_id, "assistant", caso.apresentacao)
-    return CasoAberto(caso_id=caso_id, titulo=caso.titulo, apresentacao=caso.apresentacao)
+    apresentacao = f"{caso.apresentacao}\n\n{AVISO_RELATO}" if relato else caso.apresentacao
+    await db.adicionar_resposta(s, caso_id, "assistant", apresentacao)
+    return CasoAberto(caso_id=caso_id, titulo=caso.titulo, ciclo=corpo.ciclo, apresentacao=apresentacao)
 
 
 @router.post(
@@ -277,34 +291,45 @@ async def conversar(
     return StreamingResponse(gerar(), media_type="text/plain; charset=utf-8")
 
 
-@router.post("/casos/{caso_id}/diagnostico", response_model=ai.Feedback)
+@router.post("/casos/{caso_id}/diagnostico", response_model=ai.FeedbackLeitura)
 async def diagnosticar(
     caso_id: str,
-    corpo: Diagnostico,
+    corpo: RespostaFinal,
     usuario: Usuario = Depends(usuario_atual),
     s: AsyncSession = Depends(db.get_session),
 ):
     caso, respostas = await _caso_do_usuario(s, caso_id, usuario.id)
     if caso.status != "aberta":
         raise HTTPException(409, "Este caso já foi encerrado.")
+    resposta = corpo.model_dump()
+    if faltando := [ai.ROTULOS[c] for c in ai.CAMPOS_POR_CICLO[caso.ciclo] if not resposta[c].strip()]:
+        raise HTTPException(422, f"Preencha: {', '.join(faltando)}.")
     # As fontes do caso já são conhecidas, com os mesmos números: o feedback cita [n]
     # e o estudante acha a referência certa na lista. Puxar critérios, diferencial e
     # conduta delas é mais preciso que refazer a busca.
+    fontes_caso = await db.fontes_do_caso(s, caso_id, etapa="caso")
     blocos = [
-        (uso.numero, fonte, await busca.material(s, fonte, "feedback", principal=uso.numero == 1))
-        for uso, fonte in await db.fontes_do_caso(s, caso_id, etapa="caso")
+        (uso.numero, fonte, await busca.material(s, fonte, "feedback", principal=uso.numero == 1, ciclo=caso.ciclo))
+        for uso, fonte in fontes_caso
     ]
     try:
-        feedback = await ai.avaliar_diagnostico(
+        avaliado = await ai.avaliar_diagnostico(
             caso.especialidade,
+            caso.ciclo,
             caso.gabarito,
             _historico(respostas),
-            corpo.diagnostico,
+            resposta,
             busca.contexto(blocos),
         )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, _falha_ia(e, "avaliar o diagnóstico"))
-    await db.adicionar_resposta(s, caso_id, "user", f"Diagnóstico final: {corpo.diagnostico}")
+    # Ciclo básico: indica onde aprofundar a fisiologia (só a referência; ver rag/fisiologia.json).
+    leitura = ""
+    if caso.ciclo == "básico":
+        principal = fontes_caso[0][1] if fontes_caso else None
+        leitura = leitura_fisiologia(principal.cid10 if principal else [], caso.especialidade)
+    feedback = ai.FeedbackLeitura(**avaliado.model_dump(), leitura_indicada=leitura)
+    await db.adicionar_resposta(s, caso_id, "user", ai.texto_resposta(resposta))
     await db.encerrar_caso(
         s, caso_id, feedback.model_dump(), fontes=[(f.id, n, [t.id for t in ts]) for n, f, ts in blocos if ts]
     )

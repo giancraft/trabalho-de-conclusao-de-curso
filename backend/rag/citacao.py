@@ -7,7 +7,10 @@ texto do TCC dizerem a mesma coisa. Devolve também o trecho que a norma manda d
 (título do periódico no artigo; título do documento no PCDT): a interface põe em negrito.
 """
 
+import json
 from datetime import date
+from functools import cache
+from pathlib import Path
 
 _MESES = "jan. fev. mar. abr. maio jun. jul. ago. set. out. nov. dez.".split()
 # Palavras que ficam em minúscula no título do periódico (exceto na primeira posição).
@@ -41,10 +44,12 @@ def titulo_periodico(titulo: str) -> str:
 
 
 def citacao_abnt(fonte, acesso: date) -> tuple[str, str]:
-    """(referência completa, trecho em destaque) de um PCDT ou de um artigo.
+    """(referência completa, trecho em destaque) de um PCDT, manual do MS ou artigo.
 
     `fonte` precisa de: tipo, titulo, orgao, identificador, publicado_em, url e, nos
-    artigos, bibliografia (autores, revista, volume, numero, paginas, ano, doi).
+    artigos, bibliografia (autores, revista, volume, numero, paginas, ano, doi); nos
+    manuais, bibliografia da ficha catalográfica (autor, obra, subtitulo, edicao, local,
+    editora, ano, paginas).
     """
     final = f"Disponível em: {fonte.url}. Acesso em: {data_abnt(acesso)}."
     if fonte.tipo == "PCDT":
@@ -54,6 +59,17 @@ def citacao_abnt(fonte, acesso: date) -> tuple[str, str]:
         return f"BRASIL. {fonte.orgao}. {destaque}.{portaria} {final}", destaque
 
     b = fonte.bibliografia
+    if fonte.tipo == "Manual MS":
+        # Monografia de autor entidade (NBR 6023, 8.1): só o título vai em destaque, o
+        # subtítulo não.
+        destaque = b["obra"]
+        subtitulo = f": {b['subtitulo']}" if b.get("subtitulo") else ""
+        paginas = f" {b['paginas']}" if b.get("paginas") else ""
+        return (
+            f"BRASIL. {b['autor']}. {destaque}{subtitulo}. {b['edicao']} "
+            f"{b['local']}: {b['editora']}, {b['ano']}.{paginas} {final}"
+        ), destaque
+
     destaque = titulo_periodico(b["revista"])
     partes = [destaque]
     partes += [f"v. {b['volume']}"] if b.get("volume") else []
@@ -70,6 +86,27 @@ def citacao_abnt(fonte, acesso: date) -> tuple[str, str]:
 def url_secao(url: str, secao_id: str | None) -> str:
     """Link direto para a seção no PMC (o id da <sec> vira âncora)."""
     return f"{url}#{secao_id}" if secao_id else url
+
+
+@cache
+def _fisiologia() -> dict:
+    return json.loads((Path(__file__).parent / "fisiologia.json").read_text())
+
+
+def leitura_fisiologia(cid10: list[str], especialidade: str) -> str:
+    """Leitura indicada de fisiologia do ciclo básico (Guyton & Hall), só a referência.
+
+    Unidade do livro pelo capítulo do CID-10 da doença (prefixo mais longo vence:
+    "D50" → sangue, não neoplasia) ou, sem CID (relato de caso), pela especialidade. O
+    título vem entre ** para a interface pôr em negrito, como pede a NBR 6023.
+    """
+    tabela = _fisiologia()
+    unidades = []
+    if cid10:
+        candidatos = [(len(p), us) for ps, us in tabela["por_cid"] for p in ps if cid10[0].startswith(p)]
+        unidades = max(candidatos)[1] if candidatos else []
+    unidades = unidades or tabela["por_especialidade"].get(especialidade, [])
+    return f"{tabela['obra']} {'; '.join(unidades)}." if unidades else ""
 
 
 if __name__ == "__main__":
@@ -126,6 +163,32 @@ if __name__ == "__main__":
     sem_portaria = SimpleNamespace(**{**vars(pcdt), "identificador": "", "publicado_em": None})
     assert "Crônica. Disponível em:" in citacao_abnt(sem_portaria, acesso)[0]
 
+    dengue = SimpleNamespace(
+        tipo="Manual MS", titulo="Dengue", url="https://www.gov.br/saude/x/view",
+        bibliografia={
+            "autor": "Ministério da Saúde. Secretaria de Vigilância em Saúde e Ambiente. Departamento de Doenças Transmissíveis",
+            "obra": "Dengue", "subtitulo": "diagnóstico e manejo clínico: adulto e criança", "edicao": "6. ed.",
+            "local": "Brasília", "editora": "Ministério da Saúde", "ano": "2024", "paginas": "81 p.",
+        },
+    )
+    ref, destaque = citacao_abnt(dengue, acesso)
+    assert ref == (
+        "BRASIL. Ministério da Saúde. Secretaria de Vigilância em Saúde e Ambiente. Departamento de "
+        "Doenças Transmissíveis. Dengue: diagnóstico e manejo clínico: adulto e criança. 6. ed. "
+        "Brasília: Ministério da Saúde, 2024. 81 p. Disponível em: https://www.gov.br/saude/x/view. "
+        "Acesso em: 7 out. 2026."
+    ), ref
+    assert destaque == "Dengue"
+    sem_sub = SimpleNamespace(**{**vars(dengue), "bibliografia": {**dengue.bibliografia, "subtitulo": "", "paginas": ""}})
+    assert ". Dengue. 6. ed. Brasília: Ministério da Saúde, 2024. Disponível" in citacao_abnt(sem_sub, acesso)[0]
+
     assert url_secao("https://x/PMC1/", "sec3") == "https://x/PMC1/#sec3"
     assert url_secao("https://x/", None) == "https://x/"
-    print("OK: referências ABNT de artigo (1, 2, 3 e 5 autores) e de PCDT, datas e âncoras.")
+
+    # Leitura indicada de fisiologia: CID primeiro (prefixo mais longo), depois a área.
+    assert "Unidade V (Os líquidos corporais e os rins)" in leitura_fisiologia(["N18.0"], "Cardiologia")
+    assert "Unidade VI" in leitura_fisiologia(["D50.0"], "Oncologia"), "D50 é sangue"
+    assert leitura_fisiologia(["D10"], "Oncologia") == "", "neoplasia sem unidade: nada inventado"
+    assert "Unidade VII" in leitura_fisiologia([], "Pneumologia"), "relato sem CID: pela área"
+    assert leitura_fisiologia(["I10"], "x").startswith("HALL, John E.; HALL, Michael E. **Guyton")
+    print("OK: referências ABNT de artigo (1, 2, 3 e 5 autores), de PCDT e de manual, datas, âncoras e fisiologia.")
