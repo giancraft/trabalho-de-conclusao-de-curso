@@ -1,24 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronRight, Search } from 'lucide-react'
 import type { NoTema } from '../types'
+import { CHAVE, lerPreferencias } from '../preferencias'
 
 interface Props {
   arvore: NoTema[]
   ciclos: string[]
   ocupado: boolean
   onGerar: (selecao: string[], ciclo: string, quantidade: number) => void
-}
-
-// Seleção e preferências lembradas entre visitas, só neste navegador. Sem storage
-// (aba anônima, bloqueio), a tela funciona igual, só não lembra.
-const CHAVE = 'simulado:preferencias'
-
-function lerPreferencias(): { marcados: string[]; ciclo?: string; quantidade?: number } {
-  try {
-    return JSON.parse(localStorage.getItem(CHAVE) ?? '') ?? { marcados: [] }
-  } catch {
-    return { marcados: [] }
-  }
 }
 
 function folhas(no: NoTema): string[] {

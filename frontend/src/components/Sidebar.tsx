@@ -1,4 +1,4 @@
-import { Check, LogOut, Plus, ShieldAlert, Stethoscope, Trash2 } from 'lucide-react'
+import { BarChart3, Check, LogOut, Plus, ShieldAlert, Stethoscope, Trash2 } from 'lucide-react'
 import type { ConversaResumo, Usuario } from '../types'
 
 interface Props {
@@ -9,6 +9,8 @@ interface Props {
   conversaAtivaId: string | null
   onFechar: () => void
   onNovoSimulado: () => void
+  onDesempenho: () => void
+  desempenhoAtivo: boolean
   onAbrirConversa: (id: string) => void
   onApagarConversa: (id: string) => void
   onLogout: () => void
@@ -24,6 +26,8 @@ export default function Sidebar({
   conversaAtivaId,
   onFechar,
   onNovoSimulado,
+  onDesempenho,
+  desempenhoAtivo,
   onAbrirConversa,
   onApagarConversa,
   onLogout,
@@ -62,6 +66,16 @@ export default function Sidebar({
         >
           <Plus className="h-4 w-4" />
           Novo simulado
+        </button>
+        <button
+          onClick={onDesempenho}
+          className={`mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
+            desempenhoAtivo ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
+          }`}
+          aria-current={desempenhoAtivo ? 'page' : undefined}
+        >
+          <BarChart3 className="h-4 w-4" />
+          Meu desempenho
         </button>
 
         <div className="mt-5 flex min-h-0 flex-1 flex-col">

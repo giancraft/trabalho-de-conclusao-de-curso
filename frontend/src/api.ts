@@ -1,6 +1,7 @@
 import type {
   CasoAberto,
   ConversaCompleta,
+  Desempenho,
   ConversaResumo,
   Feedback,
   Opcoes,
@@ -124,4 +125,9 @@ export async function enviarDiagnostico(
     body: JSON.stringify(resposta),
   })
   return (await checar(res)).json()
+}
+
+/** Painel do estudante: KPIs, evolução, recortes e recomendações (calculados no servidor). */
+export async function buscarDesempenho(): Promise<Desempenho> {
+  return (await checar(await fetch('/api/desempenho'))).json()
 }

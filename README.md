@@ -9,10 +9,12 @@ Protótipo-base do TCC *"Sistema de apoio ao estudo médico baseado em inteligê
 
 1. O estudante **cria uma conta e faz login** (senha com hash bcrypt; sessão em cookie
    httpOnly revogável — o token nunca é acessível por JavaScript).
-2. Escolhe **especialidade** (22 áreas da graduação) e **dificuldade**; o sistema sorteia
-   uma condição do **corpus curado de PCDT do Ministério da Saúde** e a IA apresenta o
-   paciente com os achados ancorados no protocolo sorteado (o gabarito fica **apenas no
-   servidor** — impossível ver pelo navegador).
+2. Monta um **simulado**: marca temas numa árvore (grande área → especialidade → tema),
+   escolhe o **ciclo** do curso e quantos casos quer. Cada caso sorteia uma condição do
+   **corpus curado** (PCDT e manuais do Ministério da Saúde, relatos de caso), com os temas
+   mais frequentes na prática e nas provas saindo mais vezes; a IA apresenta o paciente
+   com os achados ancorados na fonte sorteada (o gabarito fica **apenas no servidor** —
+   impossível ver pelo navegador).
 3. No chat, conduz a investigação: perguntas de anamnese, exame físico, exames. As
    respostas chegam em **streaming**, como nos chats de IA conhecidos.
 4. Ao clicar em **"Dar diagnóstico"**, envia a hipótese final e recebe: acertos,
@@ -22,6 +24,10 @@ Protótipo-base do TCC *"Sistema de apoio ao estudo médico baseado em inteligê
    diagnóstico.
 5. **Todas as conversas persistem** (PostgreSQL) e aparecem no menu lateral: casos abertos
    podem ser retomados de onde pararam; encerrados abrem em leitura com o feedback.
+6. Em **Meu desempenho**, acompanha acerto, evolução, tempo e perguntas por caso, acerto
+   por especialidade/ciclo/apresentação e as etapas da investigação em que mais falha —
+   tudo calculado por regra a partir do histórico, sem LLM — com recomendações do que
+   treinar a seguir ("Treinar agora" abre um simulado do tema).
 
 ## Arquitetura
 
@@ -38,7 +44,10 @@ O backend é organizado por domínio, tudo `async` de ponta a ponta:
   `avaliar_diagnostico()`. Toda chamada passa por `_estruturado()`, com o schema derivado
   dos modelos Pydantic (`json_schema` strict onde o provedor aceita; senão, schema no
   prompt + validação). Provedor e modelo vêm do `.env` — ver as receitas no `.env.example`.
-- `backend/casos/router.py` — rotas de casos (`/api/casos...`) e histórico (`/api/conversas...`).
+- `backend/casos/router.py` — árvore de temas (`/api/temas`), simulados (`/api/simulados...`),
+  casos (`/api/casos...`), histórico (`/api/conversas...`) e painel (`/api/desempenho`).
+- `backend/casos/metricas.py` — métricas e recomendações do painel (regras, sem LLM) e a
+  exportação anonimizada para a pesquisa: `python -m casos.metricas --exportar dados.csv`.
 - `backend/auth/router.py` — registro/login/logout com bcrypt e cookie de sessão httpOnly.
 - `backend/core/db.py` — persistência em PostgreSQL (SQLModel + asyncpg).
 - `backend/rag/` — RAG sobre os PCDT do Ministério da Saúde (RF04/RF14): `prevalencia.py`

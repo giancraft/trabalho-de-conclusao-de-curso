@@ -8,6 +8,7 @@ Cada função recebe a `AsyncSession` de quem chama — as rotas injetam a da re
 """
 
 import uuid
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
@@ -151,6 +152,37 @@ async def totais_dos_simulados(s: AsyncSession, usuario_id: int) -> dict[str, in
         select(Simulado.id, func.cardinality(Simulado.fila)).where(Simulado.usuario_id == usuario_id)
     )
     return dict(linhas.all())
+
+
+async def historico_de_desempenho(s: AsyncSession, usuario_id: int | None = None) -> list[dict]:
+    """Casos com a condição sorteada (a fonte [1]) e o horário de cada mensagem — a
+    entrada de `casos.metricas`. Sem `usuario_id`, de todos (exportação da pesquisa)."""
+    consulta = (
+        select(CasoClinico, FonteReferencia)
+        .outerjoin(
+            CasoFonte,
+            (CasoFonte.caso_id == CasoClinico.id) & (CasoFonte.etapa == "caso") & (CasoFonte.numero == 1),
+        )
+        .outerjoin(FonteReferencia, FonteReferencia.id == CasoFonte.fonte_id)
+    )
+    if usuario_id is not None:
+        consulta = consulta.where(CasoClinico.usuario_id == usuario_id)
+    linhas = (await s.execute(consulta)).all()
+    mensagens = defaultdict(list)
+    for caso_id, papel, instante in await s.execute(
+        select(Resposta.caso_id, Resposta.role, Resposta.criada_em)
+        .where(Resposta.caso_id.in_([c.id for c, _ in linhas]))
+        .order_by(Resposta.id)
+    ):
+        mensagens[caso_id].append((papel, instante))
+    return [
+        {
+            "usuario_id": c.usuario_id, "criada_em": c.criada_em, "ciclo": c.ciclo, "status": c.status,
+            "feedback": c.feedback, "mensagens": mensagens[c.id], "especialidade": c.especialidade,
+            "grande_area": f.grande_area if f else "", "tema": f.tema if f else "", "tipo": f.tipo if f else "",
+        }
+        for c, f in linhas
+    ]
 
 
 async def fontes_do_caso(
@@ -347,6 +379,16 @@ if __name__ == "__main__":
             assert simulado.fila == [fonte.id] * 3 and [c.titulo for c in casos_sim] == ["caso 1", "caso 2"]
             assert await carregar_simulado(s, sid, usuario_id=999) is None, "não vaza simulado de outro usuário"
             assert await totais_dos_simulados(s, uid) == {sid: 3}
+
+            # Histórico do painel: a fonte [1] de cada caso e o horário das mensagens.
+            fonte.tema, fonte.grande_area = "pcdt-ic", "Clínica Médica"
+            hid = await criar_caso(s, uid, "h", "Cardiologia", "clínico", {}, fontes=[(fonte.id, 1, [])])
+            await adicionar_resposta(s, hid, "assistant", "a")
+            await adicionar_resposta(s, hid, "user", "b")
+            hist = {h["tema"]: h for h in await historico_de_desempenho(s, uid)}
+            assert [p for p, _ in hist["pcdt-ic"]["mensagens"]] == ["assistant", "user"]
+            assert hist["pcdt-ic"]["grande_area"] == "Clínica Médica" and "" in hist, "caso sem fonte entra vazio"
+            assert await historico_de_desempenho(s, usuario_id=999) == []
 
         print("OK: CRUD de usuários, sessões, casos clínicos, simulados e respostas passa.")
 

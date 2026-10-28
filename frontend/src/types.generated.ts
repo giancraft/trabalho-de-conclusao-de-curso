@@ -93,6 +93,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/desempenho": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Desempenho
+         * @description Painel do estudante: KPIs, evolução, recortes e o que estudar a seguir (RF10, RF11).
+         */
+        get: operations["desempenho_api_desempenho_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/conversas": {
         parameters: {
             query?: never;
@@ -300,6 +320,26 @@ export interface components {
             /** Total */
             total?: number | null;
         };
+        /** Desempenho */
+        Desempenho: {
+            kpis: components["schemas"]["Kpis"];
+            /** Evolucao */
+            evolucao: components["schemas"]["PontoEvolucao"][];
+            /** Por Semana */
+            por_semana: components["schemas"]["Semana"][];
+            /** Por Especialidade */
+            por_especialidade: components["schemas"]["Grupo"][];
+            /** Por Tema */
+            por_tema: components["schemas"]["Grupo"][];
+            /** Por Ciclo */
+            por_ciclo: components["schemas"]["Grupo"][];
+            /** Por Apresentacao */
+            por_apresentacao: components["schemas"]["Grupo"][];
+            /** Lacunas */
+            lacunas: components["schemas"]["LacunaPorEtapa"][];
+            /** Recomendacoes */
+            recomendacoes: components["schemas"]["Recomendacao"][];
+        };
         /**
          * FeedbackLeitura
          * @description O feedback como a API devolve e o banco guarda.
@@ -370,6 +410,24 @@ export interface components {
             /** Secoes */
             secoes: components["schemas"]["SecaoConsultada"][];
         };
+        /**
+         * Grupo
+         * @description Recorte do desempenho: uma especialidade, um tema, um ciclo...
+         */
+        Grupo: {
+            /** Id */
+            id: string | null;
+            /** Nome */
+            nome: string;
+            /** Detalhe */
+            detalhe: string | null;
+            /** Casos */
+            casos: number;
+            /** Acertos */
+            acertos: number;
+            /** Ultimo */
+            ultimo: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -392,6 +450,34 @@ export interface components {
             acertou: boolean | null;
             /** Diagnostico Correto */
             diagnostico_correto: string | null;
+        };
+        /** Kpis */
+        Kpis: {
+            /** Casos Concluidos */
+            casos_concluidos: number;
+            /** Casos Abertos */
+            casos_abertos: number;
+            /** Taxa Acerto */
+            taxa_acerto: number | null;
+            /** Taxa Acerto Recente */
+            taxa_acerto_recente: number | null;
+            /** Taxa Acerto Anterior */
+            taxa_acerto_anterior: number | null;
+            /** Minutos Por Caso */
+            minutos_por_caso: number | null;
+            /** Perguntas Por Caso */
+            perguntas_por_caso: number | null;
+            /** Lacunas Por Caso */
+            lacunas_por_caso: number | null;
+        };
+        /** LacunaPorEtapa */
+        LacunaPorEtapa: {
+            /** Etapa */
+            etapa: string;
+            /** Total */
+            total: number;
+            /** Por Caso */
+            por_caso: number;
         };
         /** ListaCasos */
         ListaCasos: {
@@ -457,6 +543,34 @@ export interface components {
             /** Ciclos */
             ciclos: string[];
         };
+        /** PontoEvolucao */
+        PontoEvolucao: {
+            /** Ordem */
+            ordem: number;
+            /**
+             * Data
+             * Format: date-time
+             */
+            data: string;
+            /** Acertou */
+            acertou: boolean;
+            /** Acerto Movel */
+            acerto_movel: number;
+        };
+        /** Recomendacao */
+        Recomendacao: {
+            /**
+             * Tipo
+             * @enum {string}
+             */
+            tipo: "fragil" | "nao_praticado" | "etapa";
+            /** No */
+            no: string | null;
+            /** Titulo */
+            titulo: string;
+            /** Motivo */
+            motivo: string;
+        };
         /** Registro */
         Registro: {
             /** Nome */
@@ -495,6 +609,18 @@ export interface components {
             titulo: string;
             /** Url */
             url: string;
+        };
+        /** Semana */
+        Semana: {
+            /**
+             * Semana
+             * Format: date
+             */
+            semana: string;
+            /** Casos */
+            casos: number;
+            /** Acertos */
+            acertos: number;
         };
         /** SimuladoLeitura */
         SimuladoLeitura: {
@@ -682,6 +808,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Opcoes"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    desempenho_api_desempenho_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Desempenho"];
                 };
             };
             /** @description Validation Error */

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
 from auth.router import usuario_atual
-from casos import ai
+from casos import ai, metricas
 from core import db
 from models import (
     CasoAberto,
@@ -23,6 +23,7 @@ from models import (
     CasoLeitura,
     CasoFonte,
     CasoResumo,
+    Desempenho,
     FonteLeitura,
     FonteReferencia,
     ItemSimulado,
@@ -34,6 +35,7 @@ from models import (
     SimuladoLeitura,
     Trecho,
     Usuario,
+    agora,
 )
 from rag import busca, temas
 from rag.citacao import citacao_abnt, leitura_fisiologia, url_secao
@@ -183,6 +185,24 @@ async def arvore_de_temas(
     }
     nomes = dict((await s.execute(select(F.chave, F.titulo).where(F.chave.in_({k[2] for k in disponiveis})))).all())
     return Opcoes(arvore=temas.arvore(disponiveis, respondidos, nomes), ciclos=ai.CICLOS)
+
+
+@router.get("/desempenho", response_model=Desempenho)
+async def desempenho(
+    usuario: Usuario = Depends(usuario_atual), s: AsyncSession = Depends(db.get_session)
+):
+    """Painel do estudante: KPIs, evolução, recortes e o que estudar a seguir (RF10, RF11)."""
+    F = FonteReferencia
+    casos = await db.historico_de_desempenho(s, usuario.id)
+    # Temas sorteáveis do mais ao menos importante: base do "ainda não praticado".
+    importantes = [
+        {"id": f"t:{chave}", "nome": titulo}
+        for chave, titulo in await s.execute(
+            select(F.chave, F.titulo).where(F.sorteavel, F.tipo.in_(temas.CONDICOES)).order_by(F.peso.desc()).limit(40)
+        )
+    ]
+    nomes = dict((await s.execute(select(F.chave, F.titulo).where(F.chave.in_({c["tema"] for c in casos})))).all())
+    return Desempenho(**metricas.resumir(casos, importantes, nomes, agora()))
 
 
 @router.get("/conversas", response_model=ListaCasos)

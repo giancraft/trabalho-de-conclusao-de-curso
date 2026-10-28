@@ -296,3 +296,66 @@ class SimuladoLeitura(BaseModel):
     ciclo: str
     total: int
     casos: list[ItemSimulado]
+
+
+# --- painel de desempenho (casos/metricas.py) ---
+
+
+class Kpis(BaseModel):
+    casos_concluidos: int
+    casos_abertos: int
+    taxa_acerto: float | None  # 0–1; None sem caso encerrado
+    taxa_acerto_recente: float | None  # últimas 4 semanas
+    taxa_acerto_anterior: float | None  # antes disso
+    minutos_por_caso: float | None  # mediana do tempo ativo
+    perguntas_por_caso: float | None
+    lacunas_por_caso: float | None
+
+
+class PontoEvolucao(BaseModel):
+    ordem: int
+    data: datetime
+    acertou: bool
+    acerto_movel: float  # acerto dos últimos casos até este
+
+
+class Semana(BaseModel):
+    semana: date  # segunda-feira
+    casos: int
+    acertos: int
+
+
+class Grupo(BaseModel):
+    """Recorte do desempenho: uma especialidade, um tema, um ciclo..."""
+
+    id: str | None  # nó da árvore de temas, para treinar de novo
+    nome: str
+    detalhe: str | None  # grande área da especialidade; especialidade do tema
+    casos: int
+    acertos: int
+    ultimo: datetime | None
+
+
+class LacunaPorEtapa(BaseModel):
+    etapa: str
+    total: int
+    por_caso: float
+
+
+class Recomendacao(BaseModel):
+    tipo: Literal["fragil", "nao_praticado", "etapa"]
+    no: str | None  # nó para o "Treinar agora"; None na etapa da investigação
+    titulo: str
+    motivo: str
+
+
+class Desempenho(BaseModel):
+    kpis: Kpis
+    evolucao: list[PontoEvolucao]
+    por_semana: list[Semana]
+    por_especialidade: list[Grupo]
+    por_tema: list[Grupo]
+    por_ciclo: list[Grupo]
+    por_apresentacao: list[Grupo]
+    lacunas: list[LacunaPorEtapa]
+    recomendacoes: list[Recomendacao]
