@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Stethoscope } from 'lucide-react'
 import * as api from '../api'
+import Termo from './Termo'
 import type { Usuario } from '../types'
 
 const campo =
@@ -13,6 +14,8 @@ export default function AuthPage({ onEntrar }: { onEntrar: (u: Usuario) => void 
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
+  const [aceite, setAceite] = useState(false)
+  const [termoAberto, setTermoAberto] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
   const [ocupado, setOcupado] = useState(false)
 
@@ -24,7 +27,7 @@ export default function AuthPage({ onEntrar }: { onEntrar: (u: Usuario) => void 
       const usuario =
         modo === 'login'
           ? await api.login(email, senha)
-          : await api.registrar(nome, email, senha)
+          : await api.registrar(nome, email, senha, aceite)
       onEntrar(usuario)
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Falha na autenticação.')
@@ -94,6 +97,28 @@ export default function AuthPage({ onEntrar }: { onEntrar: (u: Usuario) => void 
                 <p className="mt-1 text-xs text-zinc-400">Mínimo de 8 caracteres.</p>
               )}
             </div>
+            {modo === 'registro' && (
+              <label className="flex items-start gap-2 text-sm text-zinc-600">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-teal-600"
+                  checked={aceite}
+                  onChange={(e) => setAceite(e.target.checked)}
+                  required
+                />
+                <span>
+                  Li e aceito o{' '}
+                  <button
+                    type="button"
+                    onClick={() => setTermoAberto(true)}
+                    className="font-medium text-teal-700 underline-offset-2 hover:underline"
+                  >
+                    termo de uso e tratamento de dados
+                  </button>
+                  .
+                </span>
+              </label>
+            )}
           </div>
 
           {erro && (
@@ -127,6 +152,7 @@ export default function AuthPage({ onEntrar }: { onEntrar: (u: Usuario) => void 
         <p className="mt-4 text-center text-xs text-zinc-400">
           Simulação educacional — não fornece orientação clínica real.
         </p>
+        <Termo aberto={termoAberto} onFechar={() => setTermoAberto(false)} />
       </div>
     </div>
   )

@@ -7,6 +7,11 @@ import AuthPage from './components/AuthPage'
 import SeletorTemas from './components/SeletorTemas'
 import { lerPreferencias } from './preferencias'
 import Desempenho from './components/Desempenho'
+import Conta from './components/Conta'
+import AdminIA from './components/AdminIA'
+import ConfigIA from './components/ConfigIA'
+import Termo from './components/Termo'
+import type { Tela } from './components/Sidebar'
 import ResumoSimulado from './components/ResumoSimulado'
 import * as api from './api'
 import type {
@@ -35,7 +40,7 @@ export default function App() {
   const [opcoes, setOpcoes] = useState<Opcoes | null>(null)
   const [progresso, setProgresso] = useState<Progresso | null>(null)
   const [resumo, setResumo] = useState<Simulado | null>(null) // no fim do simulado
-  const [tela, setTela] = useState<'caso' | 'desempenho'>('caso')
+  const [tela, setTela] = useState<Tela>('caso')
 
   const [conversas, setConversas] = useState<ConversaResumo[]>([])
   const [casoId, setCasoId] = useState<string | null>(null)
@@ -87,9 +92,9 @@ export default function App() {
     setTela('caso')
   }
 
-  function verDesempenho() {
+  function irPara(destino: Tela) {
     setMenuAberto(false)
-    setTela('desempenho')
+    setTela(destino)
   }
 
   /** "Treinar agora" do painel: um simulado curto só daquele tema, no ciclo de sempre. */
@@ -244,8 +249,8 @@ export default function App() {
         conversaAtivaId={casoId}
         onFechar={() => setMenuAberto(false)}
         onNovoSimulado={limparChat}
-        onDesempenho={verDesempenho}
-        desempenhoAtivo={tela === 'desempenho'}
+        tela={tela}
+        onTela={irPara}
         onAbrirConversa={abrirConversa}
         onApagarConversa={apagarConversa}
         onLogout={sair}
@@ -264,6 +269,23 @@ export default function App() {
         </header>
         {tela === 'desempenho' ? (
           <Desempenho ocupado={ocupado} onTreinar={treinar} />
+        ) : tela === 'conta' ? (
+          <Conta
+            usuario={usuario}
+            onAtualizado={(u) => {
+              setUsuario(u)
+              atualizarConversas()
+            }}
+            onExcluida={() => {
+              limparChat()
+              setConversas([])
+              setUsuario(null)
+            }}
+          />
+        ) : tela === 'admin-ia' ? (
+          <AdminIA />
+        ) : tela === 'config-ia' ? (
+          <ConfigIA />
         ) : (
         <>
         {casoId && progresso && progresso.total > 1 && (
@@ -336,6 +358,25 @@ export default function App() {
         </>
         )}
       </main>
+      {/* Conta anterior ao termo: aceitar para continuar (LGPD). */}
+      <Termo
+        aberto={!usuario.consentiu}
+        obrigatorio
+        onFechar={() => {}}
+        acoes={
+          <>
+            <button onClick={sair} className="rounded-lg px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-100">
+              Sair
+            </button>
+            <button
+              onClick={() => api.consentir().then(setUsuario).catch(() => {})}
+              className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500"
+            >
+              Li e aceito
+            </button>
+          </>
+        }
+      />
     </div>
   )
 }

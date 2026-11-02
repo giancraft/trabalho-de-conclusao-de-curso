@@ -1,5 +1,7 @@
-import { BarChart3, Check, LogOut, Plus, ShieldAlert, Stethoscope, Trash2 } from 'lucide-react'
+import { Activity, BarChart3, Check, LogOut, Plus, Settings2, ShieldAlert, Stethoscope, Trash2 } from 'lucide-react'
 import type { ConversaResumo, Usuario } from '../types'
+
+export type Tela = 'caso' | 'desempenho' | 'conta' | 'admin-ia' | 'config-ia'
 
 interface Props {
   ocupado: boolean
@@ -9,8 +11,8 @@ interface Props {
   conversaAtivaId: string | null
   onFechar: () => void
   onNovoSimulado: () => void
-  onDesempenho: () => void
-  desempenhoAtivo: boolean
+  tela: Tela
+  onTela: (t: Tela) => void
   onAbrirConversa: (id: string) => void
   onApagarConversa: (id: string) => void
   onLogout: () => void
@@ -26,8 +28,8 @@ export default function Sidebar({
   conversaAtivaId,
   onFechar,
   onNovoSimulado,
-  onDesempenho,
-  desempenhoAtivo,
+  tela,
+  onTela,
   onAbrirConversa,
   onApagarConversa,
   onLogout,
@@ -67,16 +69,32 @@ export default function Sidebar({
           <Plus className="h-4 w-4" />
           Novo simulado
         </button>
-        <button
-          onClick={onDesempenho}
-          className={`mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
-            desempenhoAtivo ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
-          }`}
-          aria-current={desempenhoAtivo ? 'page' : undefined}
-        >
-          <BarChart3 className="h-4 w-4" />
-          Meu desempenho
-        </button>
+        <nav className="mt-2 space-y-0.5">
+          {(
+            [
+              ['desempenho', 'Meu desempenho', BarChart3],
+              // Itens do administrador: a interface só esconde; quem protege é o backend (403).
+              ...(usuario.papel === 'admin'
+                ? ([
+                    ['admin-ia', 'IA · desempenho', Activity],
+                    ['config-ia', 'IA · configuração', Settings2],
+                  ] as const)
+                : []),
+            ] as const
+          ).map(([destino, texto, Icone]) => (
+            <button
+              key={destino}
+              onClick={() => onTela(destino)}
+              className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
+                tela === destino ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
+              }`}
+              aria-current={tela === destino ? 'page' : undefined}
+            >
+              <Icone className="h-4 w-4" />
+              {texto}
+            </button>
+          ))}
+        </nav>
 
         <div className="mt-5 flex min-h-0 flex-1 flex-col">
           <p className={rotulo}>Conversas</p>
@@ -126,10 +144,20 @@ export default function Sidebar({
 
         <div className="mt-3 space-y-3 border-t border-zinc-800 pt-3">
           <div className="flex items-center justify-between px-1">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-zinc-200">{usuario.nome}</p>
-              <p className="truncate text-xs text-zinc-500">{usuario.email}</p>
-            </div>
+            <button
+              onClick={() => onTela('conta')}
+              className={`-mx-1 min-w-0 flex-1 rounded-lg px-1 py-1 text-left transition-colors ${
+                tela === 'conta' ? 'bg-zinc-800' : 'hover:bg-zinc-800/60'
+              }`}
+              title="Minha conta"
+              aria-current={tela === 'conta' ? 'page' : undefined}
+            >
+              <span className="block truncate text-sm font-medium text-zinc-200">{usuario.nome}</span>
+              <span className="block truncate text-xs text-zinc-500">
+                {usuario.email}
+                {usuario.papel === 'admin' && ' · admin'}
+              </span>
+            </button>
             <button
               onClick={onLogout}
               className="shrink-0 rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"

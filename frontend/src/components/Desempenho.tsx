@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -21,86 +21,15 @@ import {
 } from 'recharts'
 import * as api from '../api'
 import type { Desempenho as Dados, Grupo } from '../types'
+import { COR, EIXO, GRADE, decimal, diaMes, haQuanto, pct } from '../graficos'
+import { Cartao, Dica, Figura } from './Painel'
 
 interface Props {
   ocupado: boolean
   onTreinar: (no: string) => void
 }
 
-// Uma série por gráfico, na cor do app (teal-600, validada contra a superfície branca);
-// grade e eixos recessivos. Texto nunca usa a cor do dado.
-const COR = '#0d9488'
-const GRADE = '#e4e4e7' // zinc-200
-const EIXO = { fontSize: 12, fill: '#71717a' } // zinc-500
 const MINIMO = 3 // casos para o painel dizer alguma coisa
-
-const pct = (v: number | null | undefined) => (v == null ? '—' : `${Math.round(v * 100)}%`)
-const decimal = (v: number | null | undefined, casas = 1) =>
-  v == null ? '—' : v.toLocaleString('pt-BR', { maximumFractionDigits: casas })
-const diaMes = (d: string) =>
-  new Date(d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'UTC' })
-
-function haQuanto(iso: string | null) {
-  if (!iso) return '—'
-  const dias = Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000)
-  return new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' }).format(dias, 'day')
-}
-
-function Cartao({ titulo, valor, detalhe }: { titulo: string; valor: string; detalhe?: ReactNode }) {
-  return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4">
-      <p className="text-xs font-medium text-zinc-500">{titulo}</p>
-      <p className="mt-1 text-3xl font-semibold tabular-nums text-zinc-900">{valor}</p>
-      {detalhe && <div className="mt-1 text-xs text-zinc-500">{detalhe}</div>}
-    </div>
-  )
-}
-
-/** Gráfico com título e a mesma informação em tabela (para quem não lê o gráfico). */
-function Figura({
-  titulo,
-  descricao,
-  tabela,
-  children,
-}: {
-  titulo: string
-  descricao: string
-  tabela: [string, string][]
-  children: ReactNode
-}) {
-  return (
-    <section className="rounded-xl border border-zinc-200 bg-white p-4" aria-label={titulo}>
-      <h3 className="text-sm font-semibold text-zinc-900">{titulo}</h3>
-      <p className="mb-3 text-xs text-zinc-500">{descricao}</p>
-      {children}
-      <details className="mt-2 text-xs text-zinc-500">
-        <summary className="cursor-pointer select-none">Ver em tabela</summary>
-        <table className="mt-2 w-full">
-          <tbody>
-            {tabela.map(([rotulo, valor]) => (
-              <tr key={rotulo} className="border-t border-zinc-100">
-                <td className="py-1 pr-2">{rotulo}</td>
-                <td className="py-1 text-right tabular-nums text-zinc-700">{valor}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </details>
-    </section>
-  )
-}
-
-function Dica({ linhas }: { linhas: string[] }) {
-  return (
-    <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs shadow-sm">
-      {linhas.map((l, i) => (
-        <p key={i} className={i ? 'text-zinc-500' : 'font-medium text-zinc-800'}>
-          {l}
-        </p>
-      ))}
-    </div>
-  )
-}
 
 /** Barras horizontais de acerto (0–100%), com "n" ao lado: 1 de 1 não é 7 de 7. */
 function BarrasDeAcerto({ grupos }: { grupos: Grupo[] }) {

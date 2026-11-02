@@ -23,7 +23,7 @@ from sqlalchemy import Column, DateTime, Integer, LargeBinary, String
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Field, SQLModel
 
-from casos.ai import FeedbackLeitura
+from casos.ai import ConfigIA, FeedbackLeitura
 from rag.embeddings import DIMENSAO
 
 
@@ -56,6 +56,11 @@ class Usuario(SQLModel, table=True):
     # de conferir a senha.
     senha_hash: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
     criado_em: datetime = Field(default_factory=agora, sa_column=_coluna_data())
+    # estudante | admin. Admin só nasce pelo CLI (`python -m auth.admin promover`), nunca
+    # pela interface: ele vê o desempenho e muda a configuração da IA.
+    papel: str = "estudante"
+    # Aceite do termo de uso e tratamento de dados (LGPD); None = conta anterior ao termo.
+    consentiu_em: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
 
 
 class Sessao(SQLModel, table=True):
@@ -111,6 +116,41 @@ class Resposta(SQLModel, table=True):
     caso_id: str = Field(foreign_key="caso_clinico.id", ondelete="CASCADE", index=True)
     role: str  # user | assistant
     content: str
+    criada_em: datetime = Field(default_factory=agora, sa_column=_coluna_data())
+
+
+class ConfiguracaoIA(SQLModel, table=True):
+    """Versão dos parâmetros técnicos da IA (RF12). Salvar cria uma versão nova — a mais
+    recente vale; as anteriores ficam para restaurar e para rastrear (RNF08)."""
+
+    __tablename__ = "configuracao_ia"
+
+    id: int | None = Field(default=None, primary_key=True)
+    dados: dict = Field(sa_column=Column(JSONB, nullable=False))  # casos.ai.ConfigIA
+    criado_por: int | None = Field(default=None, foreign_key="usuario.id", ondelete="SET NULL")
+    criado_em: datetime = Field(default_factory=agora, sa_column=_coluna_data())
+
+
+class ChamadaIA(SQLModel, table=True):
+    """Uma chamada ao LLM: etapa, tokens, custo, latência e a configuração em vigor
+    (RNF02, RNF08). `caso_id` é None quando a geração falhou antes de o caso existir."""
+
+    __tablename__ = "chamada_ia"
+
+    id: int | None = Field(default=None, primary_key=True)
+    caso_id: str | None = Field(default=None, foreign_key="caso_clinico.id", ondelete="CASCADE", index=True)
+    usuario_id: int | None = Field(default=None, foreign_key="usuario.id", ondelete="CASCADE", index=True)
+    etapa: str  # caso | pedidos | chat | feedback
+    modelo: str
+    configuracao_id: int | None = Field(default=None, foreign_key="configuracao_ia.id", ondelete="SET NULL")
+    tokens_entrada: int = 0
+    tokens_cache: int = 0
+    tokens_saida: int = 0
+    custo: float | None = None  # USD, quando o provedor informa (OpenRouter)
+    latencia_ms: int
+    tentativas: int = 1
+    ok: bool = True
+    erro: str | None = None
     criada_em: datetime = Field(default_factory=agora, sa_column=_coluna_data())
 
 
@@ -190,6 +230,8 @@ class CasoFonte(SQLModel, table=True):
 class UsuarioPublico(BaseModel):
     nome: str
     email: str
+    papel: Literal["estudante", "admin"] = "estudante"
+    consentiu: bool = True  # False: conta antiga que ainda não aceitou o termo
 
 
 class Ok(BaseModel):
@@ -359,3 +401,71 @@ class Desempenho(BaseModel):
     por_apresentacao: list[Grupo]
     lacunas: list[LacunaPorEtapa]
     recomendacoes: list[Recomendacao]
+
+
+# --- área do administrador: desempenho, qualidade e configuração da IA ---
+
+
+class EtapaIA(BaseModel):
+    etapa: Literal["caso", "pedidos", "chat", "feedback"]
+    chamadas: int
+    latencia_p50_ms: float
+    latencia_p95_ms: float
+    tokens_entrada_medio: float
+    tokens_saida_medio: float
+    cache: float | None  # fração da entrada servida do cache do provedor
+    custo_medio: float
+
+
+class DiaIA(BaseModel):
+    dia: date
+    chamadas: int
+    custo: float
+
+
+class DesempenhoIA(BaseModel):
+    chamadas: int
+    taxa_erro: float | None
+    segunda_tentativa: float | None  # resposta inválida na 1ª tentativa
+    custo_total: float  # USD
+    casos: int
+    custo_por_caso: float | None
+    por_etapa: list[EtapaIA]
+    por_dia: list[DiaIA]
+
+
+class NaoAderente(BaseModel):
+    diagnostico: str
+    fonte: str
+
+
+class QualidadeIA(BaseModel):
+    feedbacks: int
+    feedbacks_com_citacao: float | None
+    citacoes_por_feedback: float | None
+    citacoes_validas: float | None
+    conduta_com_citacao: float | None
+    casos_com_fonte: int
+    aderencia_ao_sorteio: float | None
+    nao_aderentes: list[NaoAderente]
+    feedbacks_formato_antigo: int
+
+
+class AvaliacaoRAG(BaseModel):
+    acertos: int
+    consultas: int
+    k: int
+
+
+class VersaoConfig(BaseModel):
+    id: int
+    criado_em: datetime
+    autor: str | None
+    dados: ConfigIA
+
+
+class ConfiguracaoLeitura(BaseModel):
+    atual: ConfigIA
+    versao_id: int | None  # None: valendo o padrão do código
+    padrao: ConfigIA
+    historico: list[VersaoConfig]

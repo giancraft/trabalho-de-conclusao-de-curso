@@ -20,7 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from auth.router import router as auth_router
+from casos import ai
 from casos.router import router as casos_router
+from casos.router_admin import router as admin_router
 from core import config, db
 
 _DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
@@ -29,6 +31,10 @@ _DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # O schema é criado pelo Alembic (`alembic upgrade head`), não aqui.
+    # A configuração da IA em vigor é a última versão salva pelo administrador.
+    async with db.abrir_sessao() as s:
+        versao = await db.configuracao_atual(s)
+    ai.aplicar_config(versao.dados if versao else None, versao.id if versao else None)
     yield
     await db.engine.dispose()
 
@@ -47,6 +53,7 @@ if not config.PRODUCAO:
 
 app.include_router(auth_router)
 app.include_router(casos_router)
+app.include_router(admin_router)
 
 # Depois dos routers de propósito: um mount em "/" atende tudo o que não casou antes.
 # O diretório só existe na imagem de produção (stage `prod` do Dockerfile); em dev quem

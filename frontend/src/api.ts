@@ -1,10 +1,15 @@
 import type {
+  AvaliacaoRAG,
   CasoAberto,
+  ConfigIA,
+  ConfiguracaoLeitura,
   ConversaCompleta,
-  Desempenho,
   ConversaResumo,
+  Desempenho,
+  DesempenhoIA,
   Feedback,
   Opcoes,
+  QualidadeIA,
   RespostaFinal,
   Simulado,
   Usuario,
@@ -13,7 +18,11 @@ import type {
 async function checar(res: Response): Promise<Response> {
   if (!res.ok) {
     const corpo = await res.json().catch(() => null)
-    throw new Error(corpo?.detail ?? `Erro ${res.status} na API`)
+    // 422 de validação do FastAPI traz uma lista de erros; os nossos, uma frase.
+    const detalhe = Array.isArray(corpo?.detail)
+      ? corpo.detail.map((d: { msg: string }) => d.msg.replace(/^Value error, /, '')).join('; ')
+      : corpo?.detail
+    throw new Error(detalhe ?? `Erro ${res.status} na API`)
   }
   return res
 }
@@ -27,11 +36,16 @@ export async function buscarOpcoes(): Promise<Opcoes> {
 
 // --- autenticação (cookie httpOnly gerenciado pelo navegador) ---
 
-export async function registrar(nome: string, email: string, senha: string): Promise<Usuario> {
+export async function registrar(
+  nome: string,
+  email: string,
+  senha: string,
+  aceite: boolean,
+): Promise<Usuario> {
   const res = await fetch('/api/auth/registro', {
     method: 'POST',
     headers: json,
-    body: JSON.stringify({ nome, email, senha }),
+    body: JSON.stringify({ nome, email, senha, aceite }),
   })
   return (await checar(res)).json()
 }
@@ -54,6 +68,26 @@ export async function eu(): Promise<Usuario | null> {
   const res = await fetch('/api/auth/eu')
   if (res.status === 401) return null
   return (await checar(res)).json()
+}
+
+// --- conta do usuário (LGPD) ---
+
+export async function editarConta(nome: string, email: string): Promise<Usuario> {
+  const res = await fetch('/api/auth/eu', { method: 'PATCH', headers: json, body: JSON.stringify({ nome, email }) })
+  return (await checar(res)).json()
+}
+
+export async function consentir(): Promise<Usuario> {
+  return (await checar(await fetch('/api/auth/consentimento', { method: 'POST' }))).json()
+}
+
+/** Todos os dados do usuário, como texto JSON (o componente oferece para baixar). */
+export async function meusDados(): Promise<string> {
+  return (await checar(await fetch('/api/auth/meus-dados'))).text()
+}
+
+export async function excluirConta(senha: string): Promise<void> {
+  await checar(await fetch('/api/auth/conta', { method: 'DELETE', headers: json, body: JSON.stringify({ senha }) }))
 }
 
 // --- histórico de conversas ---
@@ -130,4 +164,31 @@ export async function enviarDiagnostico(
 /** Painel do estudante: KPIs, evolução, recortes e recomendações (calculados no servidor). */
 export async function buscarDesempenho(): Promise<Desempenho> {
   return (await checar(await fetch('/api/desempenho'))).json()
+}
+
+// --- área do administrador (o backend responde 403 para estudante) ---
+
+export async function desempenhoIA(dias: number): Promise<DesempenhoIA> {
+  return (await checar(await fetch(`/api/admin/ia/desempenho?dias=${dias}`))).json()
+}
+
+export async function qualidadeIA(): Promise<QualidadeIA> {
+  return (await checar(await fetch('/api/admin/ia/qualidade'))).json()
+}
+
+export async function avaliarRAG(): Promise<AvaliacaoRAG> {
+  return (await checar(await fetch('/api/admin/ia/avaliacao-rag', { method: 'POST' }))).json()
+}
+
+export async function lerConfigIA(): Promise<ConfiguracaoLeitura> {
+  return (await checar(await fetch('/api/admin/ia/configuracao'))).json()
+}
+
+export async function salvarConfigIA(config: ConfigIA): Promise<ConfiguracaoLeitura> {
+  const res = await fetch('/api/admin/ia/configuracao', { method: 'PUT', headers: json, body: JSON.stringify(config) })
+  return (await checar(res)).json()
+}
+
+export async function restaurarConfigIA(id: number): Promise<ConfiguracaoLeitura> {
+  return (await checar(await fetch(`/api/admin/ia/configuracao/${id}/restaurar`, { method: 'POST' }))).json()
 }

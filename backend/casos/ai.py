@@ -19,21 +19,22 @@ import json
 import logging
 import os
 import re
-from collections.abc import AsyncIterator
-from typing import TypeVar
+import time
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Qualquer provedor compatível com a API da OpenAI serve; trocar de modelo é só mudar o
 # .env (ver .env.example). O padrão é o gpt-oss-120b pelo OpenRouter, servido pela Groq:
 # na comparação de 24/10 (vs. DeepSeek V4 Flash, Qwen3-235B e GLM-5.3 Flash) foi o mais
 # rápido e o que melhor seguiu o prompt.
-MODELO = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 _BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 # "estrito": o provedor garante o json_schema. "json": só json_object (ex.: API oficial do
 # DeepSeek) — o schema vai no prompt e o Pydantic valida.
 _MODO_JSON = os.getenv("LLM_JSON", "estrito")
-_PROVEDORES = [p.strip() for p in os.getenv("LLM_PROVIDERS", "").split(",") if p.strip()]
 
 # Turnos de conversa enviados ao modelo. O chat recorta para manter o custo por turno
 # estável (e histórico inchado dispersa o modelo); a avaliação leva quase tudo, porque
@@ -42,9 +43,104 @@ _PROVEDORES = [p.strip() for p in os.getenv("LLM_PROVIDERS", "").split(",") if p
 # entre um corte e outro o começo do prompt é idêntico e o provedor o serve do cache
 # (Groq: metade do preço e fora do limite de tokens). A ficha, que é a verdade do caso,
 # está sempre no system — o corte só tira conversa antiga.
-TURNOS_CHAT = 12
-TURNOS_CHAT_APOS_CORTE = 6
-TURNOS_AVALIACAO = 30
+# Os valores ficam na configuração (`ConfigIA`), que o administrador ajusta na tela.
+
+
+class Etapa(BaseModel):
+    """Parâmetros de uma etapa: geração do caso, extração dos pedidos, chat ou feedback."""
+
+    temperatura: float = Field(ge=0, le=1.5)
+    # Esforço de raciocínio; "padrao" = não envia, vale o do modelo. Tokens de raciocínio
+    # são cobrados como saída.
+    raciocinio: Literal["padrao", "low", "medium", "high"] = "padrao"
+
+
+class ConfigIA(BaseModel):
+    """Parâmetros técnicos da IA que o administrador ajusta (RF12). Chave da API e URL do
+    provedor ficam fora: segredo mora no .env, não no banco nem na tela."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    modelo: str = Field(min_length=1)
+    # Ordem de preferência dos provedores no OpenRouter (vazio: o OpenRouter escolhe).
+    provedores: list[str] = []
+    caso: Etapa
+    pedidos: Etapa
+    chat: Etapa
+    feedback: Etapa
+    # Turnos de conversa enviados ao modelo. O chat corta em blocos (cresce até
+    # `turnos_chat`, volta a `turnos_chat_apos_corte`) em vez de deslizar a cada mensagem:
+    # entre um corte e outro o começo do prompt é idêntico e o provedor o serve do cache
+    # (Groq: metade do preço). A avaliação leva quase tudo, porque julga o raciocínio da
+    # investigação inteira (RF07).
+    turnos_chat: int = Field(ge=2, le=60)
+    turnos_chat_apos_corte: int = Field(ge=1, le=59)
+    turnos_avaliacao: int = Field(ge=2, le=100)
+
+    @model_validator(mode="after")
+    def _corte_menor(self):
+        if self.turnos_chat_apos_corte >= self.turnos_chat:
+            raise ValueError("turnos_chat_apos_corte precisa ser menor que turnos_chat")
+        return self
+
+
+# Padrão: o gpt-oss-120b pelo OpenRouter, servido pela Groq — na comparação de 24/10 (vs.
+# DeepSeek V4 Flash, Qwen3-235B e GLM-5.3 Flash) foi o mais rápido e o que melhor seguiu
+# o prompt. LLM_MODEL/LLM_PROVIDERS do .env ainda definem o ponto de partida.
+PADRAO = ConfigIA(
+    modelo=os.getenv("LLM_MODEL", "openai/gpt-oss-120b"),
+    provedores=[p.strip() for p in os.getenv("LLM_PROVIDERS", "").split(",") if p.strip()],
+    # Com a condição sorteada, a variedade já vem do corpus.
+    caso=Etapa(temperatura=0.6),
+    # Listar o que foi pedido é mecânico: temperatura 0 e raciocínio baixo deram a mesma
+    # lista (teste de equivalência de 24/10 nas mensagens reais dos casos de TEA e EM).
+    pedidos=Etapa(temperatura=0, raciocinio="low"),
+    # Baixa: no chat e no feedback importa seguir as regras, não variar o texto.
+    chat=Etapa(temperatura=0.4),
+    feedback=Etapa(temperatura=0.4),
+    turnos_chat=12,
+    turnos_chat_apos_corte=6,
+    turnos_avaliacao=30,
+)
+
+# ponytail: config em memória, trocada no PUT do admin — vale com um worker (o Dockerfile
+# roda um). Com vários workers, ler a versão do banco a cada chamada.
+_config: ConfigIA = PADRAO
+_config_id: int | None = None  # versão em vigor (configuracao_ia.id); None = padrão
+
+
+def config() -> ConfigIA:
+    return _config
+
+
+def aplicar_config(dados: dict | None, versao: int | None) -> None:
+    """Troca a configuração em vigor. Dado que não valida mais (schema mudou) cai no padrão."""
+    global _config, _config_id
+    try:
+        _config, _config_id = (ConfigIA.model_validate(dados), versao) if dados else (PADRAO, None)
+    except ValueError:
+        log.exception("Configuração da IA inválida no banco; usando o padrão")
+        _config, _config_id = PADRAO, None
+
+
+# Telemetria (RNF02, RNF08): `_estruturado` anota cada chamada aqui, e quem abriu a
+# coleta (a rota) grava no banco — este módulo não fala com o banco.
+_coleta: ContextVar[list[dict] | None] = ContextVar("coleta_ia", default=None)
+ETAPAS = {"CasoGerado": "caso", "Pedidos": "pedidos", "RespostaCaso": "chat", "Feedback": "feedback"}
+
+
+@contextmanager
+def coletar() -> Iterator[list[dict]]:
+    """`with ai.coletar() as chamadas:` junta as chamadas ao LLM feitas dentro do bloco."""
+    chamadas: list[dict] = []
+    token = _coleta.set(chamadas)
+    try:
+        yield chamadas
+    finally:
+        try:
+            _coleta.reset(token)
+        except ValueError:  # gerador de streaming fechado em outro contexto (desconexão)
+            pass
 
 # Grandes áreas das DCN 2014, agrupadas: Clínica Médica, demais áreas do currículo e
 # especialidades focais. Anestesiologia, Radiologia, Patologia e Medicina Legal ficam de
@@ -386,10 +482,6 @@ async def _extrair_pedidos(mensagem: str) -> Pedidos:
     return await _estruturado(
         Pedidos,
         [{"role": "system", "content": _SYSTEM_PEDIDOS}, {"role": "user", "content": mensagem}],
-        temperatura=0,
-        # Listar o que foi pedido é tarefa mecânica: raciocínio baixo, mesma lista (teste
-        # de equivalência de 24/10 nas mensagens reais do caso de TEA e do de EM).
-        raciocinio="low",
     )
 
 
@@ -434,8 +526,8 @@ def _extra() -> dict:
     if not _openrouter():
         return {}
     provider: dict = {"require_parameters": True, "data_collection": "deny"}
-    if _PROVEDORES:
-        provider["order"] = _PROVEDORES
+    if config().provedores:
+        provider["order"] = config().provedores
     return {"provider": provider}
 
 
@@ -456,7 +548,7 @@ def _parametros(modelo: type[BaseModel], mensagens: list[dict], raciocinio: str 
         formato = {"type": "json_object"}
     else:
         formato = _formato(modelo)
-    params = {"model": MODELO, "messages": mensagens, "response_format": formato}
+    params = {"model": config().modelo, "messages": mensagens, "response_format": formato}
     extra = _extra()
     # Esforço de raciocínio: tokens de raciocínio são cobrados como saída (4x a entrada).
     # O OpenRouter usa o objeto `reasoning`; Groq e OpenAI, `reasoning_effort`.
@@ -473,45 +565,73 @@ def _parametros(modelo: type[BaseModel], mensagens: list[dict], raciocinio: str 
 log = logging.getLogger("uvicorn.error")
 
 
-def _registrar_uso(nome: str, resp) -> None:
-    """Uma linha de log por chamada: tokens, cache e custo — o gasto real, medido."""
+def _somar_uso(uso: dict, nome: str, resp) -> None:
+    """Soma tokens, cache e custo da resposta em `uso` e loga uma linha — o gasto real."""
     u = getattr(resp, "usage", None)
     if not u:
         return
     cache = getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", None) or 0
+    custo = getattr(u, "cost", None)
+    uso["tokens_entrada"] += u.prompt_tokens or 0
+    uso["tokens_cache"] += cache
+    uso["tokens_saida"] += u.completion_tokens or 0
+    if custo is not None:
+        uso["custo"] = (uso["custo"] or 0) + custo
     log.info(
         "LLM %s %s: entrada=%s (cache=%s) saída=%s custo=%s",
-        MODELO, nome, u.prompt_tokens, cache, u.completion_tokens, getattr(u, "cost", None),
+        config().modelo, nome, u.prompt_tokens, cache, u.completion_tokens, custo,
     )
 
 
 async def _estruturado(
-    modelo: type[M], mensagens: list[dict], temperatura: float, raciocinio: str | None = None
+    modelo: type[M], mensagens: list[dict], temperatura: float | None = None
 ) -> M:
     """Chamada ao LLM que devolve `modelo` validado — o único ponto que fala com a API.
 
-    Uma segunda tentativa, sem loop, quando a resposta não valida: JSON quebrado, campo
-    faltando ou conteúdo vazio (a doc do DeepSeek avisa que o modo JSON às vezes devolve
-    vazio). O erro vai junto, para o modelo saber o que corrigir.
+    Temperatura e raciocínio vêm da etapa na configuração (`ETAPAS[modelo]`);
+    `temperatura` só sobrepõe. Uma segunda tentativa, sem loop, quando a resposta não
+    valida: JSON quebrado, campo faltando ou conteúdo vazio (a doc do DeepSeek avisa que o
+    modo JSON às vezes devolve vazio). O erro vai junto, para o modelo saber o que
+    corrigir. Cada chamada, com sucesso ou não, vai para a coleta da telemetria.
     """
+    etapa = ETAPAS[modelo.__name__]
+    ajuste = getattr(config(), etapa)
+    raciocinio = None if ajuste.raciocinio == "padrao" else ajuste.raciocinio
     params = _parametros(modelo, mensagens, raciocinio)
-    cliente = _client()
-    erro = ""
-    for _ in range(2):
-        msgs = params["messages"]
-        if erro:
-            msgs = [*msgs, {"role": "user", "content": f"Sua resposta anterior era inválida ({erro}). Responda de novo, só com o JSON correto."}]
-        resp = await cliente.chat.completions.create(**{**params, "messages": msgs}, temperature=temperatura)
-        _registrar_uso(modelo.__name__, resp)
-        if not resp.choices:  # 200 só com `error` (doc de erros do OpenRouter): tenta de novo
-            erro = f"provedor sem resposta: {getattr(resp, 'error', None)}"
-            continue
-        try:
-            # ValidationError e JSONDecodeError são ValueError
-            return modelo.model_validate(_extrair_json(resp.choices[0].message.content or ""))
-        except ValueError as e:
-            erro = str(e)[:300]
-    raise ValueError(f"Resposta inválida do modelo após 2 tentativas: {erro}")
+    uso = {"tokens_entrada": 0, "tokens_cache": 0, "tokens_saida": 0, "custo": None}
+    inicio, tentativas, falha = time.perf_counter(), 0, None
+    try:
+        cliente = _client()
+        erro = ""
+        for _ in range(2):
+            tentativas += 1
+            msgs = params["messages"]
+            if erro:
+                msgs = [*msgs, {"role": "user", "content": f"Sua resposta anterior era inválida ({erro}). Responda de novo, só com o JSON correto."}]
+            resp = await cliente.chat.completions.create(
+                **{**params, "messages": msgs},
+                temperature=ajuste.temperatura if temperatura is None else temperatura,
+            )
+            _somar_uso(uso, modelo.__name__, resp)
+            if not resp.choices:  # 200 só com `error` (doc de erros do OpenRouter): tenta de novo
+                erro = f"provedor sem resposta: {getattr(resp, 'error', None)}"
+                continue
+            try:
+                # ValidationError e JSONDecodeError são ValueError
+                return modelo.model_validate(_extrair_json(resp.choices[0].message.content or ""))
+            except ValueError as e:
+                erro = str(e)[:300]
+        raise ValueError(f"Resposta inválida do modelo após 2 tentativas: {erro}")
+    except Exception as e:
+        falha = f"{type(e).__name__}: {e}"[:200]
+        raise
+    finally:
+        if (coleta := _coleta.get()) is not None:
+            coleta.append({
+                "etapa": etapa, "modelo": config().modelo, "configuracao_id": _config_id, **uso,
+                "latencia_ms": round((time.perf_counter() - inicio) * 1000),
+                "tentativas": tentativas, "ok": falha is None, "erro": falha,
+            })
 
 
 def _janela(historico: list[dict], turnos: int, apos_corte: int | None = None) -> list[dict]:
@@ -668,9 +788,9 @@ quando pertinentes — são os dados de que o estudante precisa para calcular do
             {"role": "system", "content": _SYSTEM_BASE + " Responda no JSON do schema."},
             {"role": "user", "content": prompt},
         ],
-        # Com a condição sorteada, a variedade já vem do corpus; a temperatura alta só
-        # servia para o modelo não repetir sempre as mesmas condições.
-        temperatura=0.6 if condicao else 0.9,
+        # Sem condição sorteada (corpus vazio), a temperatura alta é o que evita o modelo
+        # repetir sempre as mesmas doenças; com ela, vale a da configuração.
+        temperatura=None if condicao else 0.9,
     )
     # O estudante vê título e apresentação com o caso aberto: um "[1]" ali apontaria para
     # a fonte — e o título da fonte é o diagnóstico (RN06).
@@ -785,13 +905,12 @@ async def responder_chat(
     pedidos = await _extrair_pedidos(mensagem)
     mensagens = [
         {"role": "system", "content": _system_tutor(especialidade, _gabarito(gabarito))},
-        *_janela(historico, TURNOS_CHAT, TURNOS_CHAT_APOS_CORTE),
+        *_janela(historico, config().turnos_chat, config().turnos_chat_apos_corte),
         {"role": "user", "content": mensagem + _checklist(pedidos)},
     ]
 
     async def gerar(msgs: list[dict]) -> RespostaCaso:
-        # baixa: aqui importa seguir as regras, não variar o texto
-        return await _estruturado(RespostaCaso, msgs, temperatura=0.4)
+        return await _estruturado(RespostaCaso, msgs)
 
     r = await gerar(mensagens)
     # Uma segunda chance, sem loop: se ainda assim veio vazio o que foi pedido, avisa o quê.
@@ -832,7 +951,7 @@ async def avaliar_diagnostico(
     rotulo = {"user": "ESTUDANTE", "assistant": "CASO"}
     conversa = "\n".join(
         f"[{rotulo.get(m['role'], m['role'])}] {m['content']}"
-        for m in _janela(historico, TURNOS_AVALIACAO)
+        for m in _janela(historico, config().turnos_avaliacao)
     )
     prompt = f"""O estudante ({especialidade}, {ciclo}) encerrou a investigação e entregou a resposta final.
 
@@ -860,7 +979,6 @@ descobrir. Seja construtivo e explicativo; não atribua nota numérica.{_referen
             {"role": "system", "content": _SYSTEM_BASE + " Responda no JSON do schema."},
             {"role": "user", "content": prompt},
         ],
-        temperatura=0.4,
     )
     validos = set(map(int, _FONTE_NUMERADA.findall(contexto)))
     return fb.model_copy(
@@ -1019,26 +1137,34 @@ if __name__ == "__main__":
     )
     _MODO_JSON = "estrito"
 
-    _BASE_URL, _PROVEDORES = "https://openrouter.ai/api/v1", ["deepinfra", "parasail"]
+    _BASE_URL = "https://openrouter.ai/api/v1"
+    aplicar_config(PADRAO.model_copy(update={"provedores": ["deepinfra", "parasail"]}).model_dump(), 7)
     prov = _extra()["provider"]
     assert prov["order"] == ["deepinfra", "parasail"] and prov["require_parameters"] is True
     assert prov["data_collection"] == "deny"
-    _PROVEDORES = []
+    aplicar_config(PADRAO.model_copy(update={"provedores": []}).model_dump(), 8)
     assert "order" not in _extra()["provider"]
+    aplicar_config(None, None)
+    assert config() is PADRAO and _config_id is None
     _BASE_URL = "https://api.groq.com/openai/v1"
     assert _extra() == {} and "extra_body" not in _parametros(Pedidos, msgs), (
         "fora do OpenRouter não manda campo que o provedor não conhece"
     )
+
+    parametros: list[dict] = []
 
     def cliente_falso(respostas: list[str]):
         chamadas = []
 
         async def create(**kw):
             chamadas.append(kw["messages"])
+            parametros.append(kw)
             texto = respostas.pop(0)
+            uso = SimpleNamespace(prompt_tokens=100, completion_tokens=20, cost=0.001,
+                                  prompt_tokens_details=SimpleNamespace(cached_tokens=40))
             if texto is None:  # 200 sem `choices`
-                return SimpleNamespace(choices=None)
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=texto))])
+                return SimpleNamespace(choices=None, usage=uso)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=texto))], usage=uso)
 
         return chamadas, SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
 
@@ -1046,11 +1172,11 @@ if __name__ == "__main__":
     chamadas, falso = cliente_falso(["", ok])
     cliente_real = _client
     _client = lambda: falso  # noqa: E731
-    assert asyncio.run(_estruturado(Pedidos, msgs, 0)).exames == ["TSH"], "vazio → 2ª tentativa"
+    assert asyncio.run(_estruturado(Pedidos, msgs)).exames == ["TSH"], "vazio → 2ª tentativa"
     assert len(chamadas) == 2 and "inválida" in chamadas[1][-1]["content"], "o erro vai junto"
     chamadas, falso = cliente_falso(['{"perguntas": []}', "nada"])
     try:
-        asyncio.run(_estruturado(Pedidos, msgs, 0))
+        asyncio.run(_estruturado(Pedidos, msgs))
         raise AssertionError("duas respostas inválidas deveriam falhar")
     except ValueError:
         pass
@@ -1058,7 +1184,44 @@ if __name__ == "__main__":
 
     # 200 sem `choices` (provedor aqueceu/escalou) também ganha a segunda tentativa.
     chamadas, falso = cliente_falso([None, ok])
-    assert asyncio.run(_estruturado(Pedidos, msgs, 0)).exames == ["TSH"] and len(chamadas) == 2
+    assert asyncio.run(_estruturado(Pedidos, msgs)).exames == ["TSH"] and len(chamadas) == 2
+
+    # Telemetria: cada chamada vira um registro com etapa, tokens somados das tentativas,
+    # custo, latência e a versão da configuração; falha também é registrada.
+    async def coletado(respostas):
+        global _client
+        _, falso = cliente_falso(respostas)
+        _client = lambda: falso  # noqa: E731
+        with coletar() as registros:
+            try:
+                await _estruturado(Pedidos, msgs)
+            except ValueError:
+                pass
+        return registros
+
+    aplicar_config(PADRAO.model_dump(), 3)
+    [r] = asyncio.run(coletado(["", ok]))
+    assert (r["etapa"], r["tentativas"], r["ok"], r["configuracao_id"]) == ("pedidos", 2, True, 3)
+    assert (r["tokens_entrada"], r["tokens_cache"], r["tokens_saida"]) == (200, 80, 40), "soma as 2 tentativas"
+    assert abs(r["custo"] - 0.002) < 1e-9 and r["latencia_ms"] >= 0
+    [r] = asyncio.run(coletado(["x", "y"]))
+    assert not r["ok"] and r["erro"].startswith("ValueError"), "falha também entra"
+    assert _coleta.get() is None, "fora do bloco não coleta"
+
+    # Configuração: temperatura e raciocínio da etapa vão no pedido; validação dos limites.
+    parametros.clear()
+    aplicar_config(PADRAO.model_copy(update={"pedidos": Etapa(temperatura=0.2, raciocinio="high")}).model_dump(), 4)
+    asyncio.run(coletado([ok]))
+    assert parametros[-1]["temperature"] == 0.2 and parametros[-1]["reasoning_effort"] == "high", "fora do OpenRouter"
+    for ruim in ({"turnos_chat_apos_corte": 12}, {"caso": {"temperatura": 3}}, {"modelo": ""}, {"chave_api": "x"}):
+        try:
+            ConfigIA.model_validate({**PADRAO.model_dump(), **ruim})
+            raise AssertionError(f"deveria rejeitar {ruim}")
+        except ValidationError:
+            pass
+    aplicar_config({"modelo": "x"}, 9)  # dado antigo que não valida mais
+    assert config() is PADRAO and _config_id is None
+    _client = lambda: falso  # noqa: E731
 
     # Esforço de raciocínio: objeto `reasoning` no OpenRouter, `reasoning_effort` fora dele.
     _BASE_URL = "https://openrouter.ai/api/v1"
@@ -1092,4 +1255,4 @@ if __name__ == "__main__":
     assert antigo.conduta_referencia == [] and antigo.leitura_indicada == "", "feedback anterior aos ciclos"
     assert "EVOLUÇÃO" in tutor, "a evolução da ficha vai para o tutor"
 
-    print("OK: parser, janela, schema strict, gabarito, referência, citações, provedor e ciclos.")
+    print("OK: parser, janela, schema strict, gabarito, referência, citações, provedor, ciclos, telemetria e configuração.")

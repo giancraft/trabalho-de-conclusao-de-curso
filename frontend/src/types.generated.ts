@@ -69,6 +69,68 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        /** Editar Conta */
+        patch: operations["editar_conta_api_auth_eu_patch"];
+        trace?: never;
+    };
+    "/api/auth/consentimento": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Consentir
+         * @description Contas criadas antes do termo aceitam no próximo acesso.
+         */
+        post: operations["consentir_api_auth_consentimento_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/meus-dados": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Meus Dados
+         * @description Tudo o que o sistema guarda do usuário, em JSON (LGPD, art. 18, II).
+         */
+        get: operations["meus_dados_api_auth_meus_dados_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/conta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Excluir Conta
+         * @description Exclui a conta e tudo o que é dela (LGPD, art. 18, VI). Pede a senha de novo: um
+         *     cookie esquecido num computador compartilhado não basta para apagar tudo.
+         */
+        delete: operations["excluir_conta_api_auth_conta_delete"];
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -242,10 +304,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/ia/desempenho": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Desempenho */
+        get: operations["desempenho_api_admin_ia_desempenho_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/ia/qualidade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Qualidade Da Saida */
+        get: operations["qualidade_da_saida_api_admin_ia_qualidade_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/ia/avaliacao-rag": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Avaliacao Rag
+         * @description Acerto@5 da recuperação no corpus ingerido (`rag/avaliacao.py`). Leva segundos.
+         */
+        post: operations["avaliacao_rag_api_admin_ia_avaliacao_rag_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/ia/configuracao": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ler Configuracao */
+        get: operations["ler_configuracao_api_admin_ia_configuracao_get"];
+        /**
+         * Salvar Configuracao
+         * @description Grava uma versão nova e passa a valer na hora. As chamadas seguintes registram o
+         *     id dela (`chamada_ia.configuracao_id`).
+         */
+        put: operations["salvar_configuracao_api_admin_ia_configuracao_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/ia/configuracao/{versao_id}/restaurar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restaurar
+         * @description Restaurar é salvar de novo os dados de uma versão antiga: o histórico não se perde.
+         */
+        post: operations["restaurar_api_admin_ia_configuracao__versao_id__restaurar_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AvaliacaoRAG */
+        AvaliacaoRAG: {
+            /** Acertos */
+            acertos: number;
+            /** Consultas */
+            consultas: number;
+            /** K */
+            k: number;
+        };
         /** CasoAberto */
         CasoAberto: {
             /** Caso Id */
@@ -320,6 +487,44 @@ export interface components {
             /** Total */
             total?: number | null;
         };
+        /**
+         * ConfigIA
+         * @description Parâmetros técnicos da IA que o administrador ajusta (RF12). Chave da API e URL do
+         *     provedor ficam fora: segredo mora no .env, não no banco nem na tela.
+         */
+        ConfigIA: {
+            /** Modelo */
+            modelo: string;
+            /**
+             * Provedores
+             * @default []
+             */
+            provedores: string[];
+            caso: components["schemas"]["Etapa"];
+            pedidos: components["schemas"]["Etapa"];
+            chat: components["schemas"]["Etapa"];
+            feedback: components["schemas"]["Etapa"];
+            /** Turnos Chat */
+            turnos_chat: number;
+            /** Turnos Chat Apos Corte */
+            turnos_chat_apos_corte: number;
+            /** Turnos Avaliacao */
+            turnos_avaliacao: number;
+        };
+        /** ConfiguracaoLeitura */
+        ConfiguracaoLeitura: {
+            atual: components["schemas"]["ConfigIA"];
+            /** Versao Id */
+            versao_id: number | null;
+            padrao: components["schemas"]["ConfigIA"];
+            /** Historico */
+            historico: components["schemas"]["VersaoConfig"][];
+        };
+        /** Confirmacao */
+        Confirmacao: {
+            /** Senha */
+            senha: string;
+        };
         /** Desempenho */
         Desempenho: {
             kpis: components["schemas"]["Kpis"];
@@ -339,6 +544,80 @@ export interface components {
             lacunas: components["schemas"]["LacunaPorEtapa"][];
             /** Recomendacoes */
             recomendacoes: components["schemas"]["Recomendacao"][];
+        };
+        /** DesempenhoIA */
+        DesempenhoIA: {
+            /** Chamadas */
+            chamadas: number;
+            /** Taxa Erro */
+            taxa_erro: number | null;
+            /** Segunda Tentativa */
+            segunda_tentativa: number | null;
+            /** Custo Total */
+            custo_total: number;
+            /** Casos */
+            casos: number;
+            /** Custo Por Caso */
+            custo_por_caso: number | null;
+            /** Por Etapa */
+            por_etapa: components["schemas"]["EtapaIA"][];
+            /** Por Dia */
+            por_dia: components["schemas"]["DiaIA"][];
+        };
+        /** DiaIA */
+        DiaIA: {
+            /**
+             * Dia
+             * Format: date
+             */
+            dia: string;
+            /** Chamadas */
+            chamadas: number;
+            /** Custo */
+            custo: number;
+        };
+        /** EdicaoConta */
+        EdicaoConta: {
+            /** Nome */
+            nome: string;
+            /** Email */
+            email: string;
+        };
+        /**
+         * Etapa
+         * @description Parâmetros de uma etapa: geração do caso, extração dos pedidos, chat ou feedback.
+         */
+        Etapa: {
+            /** Temperatura */
+            temperatura: number;
+            /**
+             * Raciocinio
+             * @default padrao
+             * @enum {string}
+             */
+            raciocinio: "padrao" | "low" | "medium" | "high";
+        };
+        /** EtapaIA */
+        EtapaIA: {
+            /**
+             * Etapa
+             * @enum {string}
+             */
+            etapa: "caso" | "pedidos" | "chat" | "feedback";
+            /** Chamadas */
+            chamadas: number;
+            /** Latencia P50 Ms */
+            latencia_p50_ms: number;
+            /** Latencia P95 Ms */
+            latencia_p95_ms: number;
+            /** Tokens Entrada Medio */
+            tokens_entrada_medio: number;
+            /** Tokens Saida Medio */
+            tokens_saida_medio: number;
+            /** Cache */
+            cache: number | null;
+            /** Custo Medio */
+            custo_medio: number;
         };
         /**
          * FeedbackLeitura
@@ -506,6 +785,13 @@ export interface components {
             /** Content */
             content: string;
         };
+        /** NaoAderente */
+        NaoAderente: {
+            /** Diagnostico */
+            diagnostico: string;
+            /** Fonte */
+            fonte: string;
+        };
         /**
          * NoTema
          * @description Nó da árvore de temas: grande área, especialidade ou tema (rag/temas.py).
@@ -557,6 +843,27 @@ export interface components {
             /** Acerto Movel */
             acerto_movel: number;
         };
+        /** QualidadeIA */
+        QualidadeIA: {
+            /** Feedbacks */
+            feedbacks: number;
+            /** Feedbacks Com Citacao */
+            feedbacks_com_citacao: number | null;
+            /** Citacoes Por Feedback */
+            citacoes_por_feedback: number | null;
+            /** Citacoes Validas */
+            citacoes_validas: number | null;
+            /** Conduta Com Citacao */
+            conduta_com_citacao: number | null;
+            /** Casos Com Fonte */
+            casos_com_fonte: number;
+            /** Aderencia Ao Sorteio */
+            aderencia_ao_sorteio: number | null;
+            /** Nao Aderentes */
+            nao_aderentes: components["schemas"]["NaoAderente"][];
+            /** Feedbacks Formato Antigo */
+            feedbacks_formato_antigo: number;
+        };
         /** Recomendacao */
         Recomendacao: {
             /**
@@ -579,6 +886,11 @@ export interface components {
             email: string;
             /** Senha */
             senha: string;
+            /**
+             * Aceite
+             * @default false
+             */
+            aceite: boolean;
         };
         /**
          * RespostaFinal
@@ -639,6 +951,17 @@ export interface components {
             nome: string;
             /** Email */
             email: string;
+            /**
+             * Papel
+             * @default estudante
+             * @enum {string}
+             */
+            papel: "estudante" | "admin";
+            /**
+             * Consentiu
+             * @default true
+             */
+            consentiu: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -652,6 +975,19 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VersaoConfig */
+        VersaoConfig: {
+            /** Id */
+            id: number;
+            /**
+             * Criado Em
+             * Format: date-time
+             */
+            criado_em: string;
+            /** Autor */
+            autor: string | null;
+            dados: components["schemas"]["ConfigIA"];
         };
     };
     responses: never;
@@ -778,6 +1114,136 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["UsuarioPublico"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    editar_conta_api_auth_eu_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EdicaoConta"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsuarioPublico"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consentir_api_auth_consentimento_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsuarioPublico"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    meus_dados_api_auth_meus_dados_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    excluir_conta_api_auth_conta_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Confirmacao"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -1109,6 +1575,200 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeedbackLeitura"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    desempenho_api_admin_ia_desempenho_get: {
+        parameters: {
+            query?: {
+                dias?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesempenhoIA"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    qualidade_da_saida_api_admin_ia_qualidade_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QualidadeIA"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    avaliacao_rag_api_admin_ia_avaliacao_rag_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AvaliacaoRAG"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ler_configuracao_api_admin_ia_configuracao_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfiguracaoLeitura"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    salvar_configuracao_api_admin_ia_configuracao_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigIA"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfiguracaoLeitura"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restaurar_api_admin_ia_configuracao__versao_id__restaurar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                versao_id: number;
+            };
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfiguracaoLeitura"];
                 };
             };
             /** @description Validation Error */

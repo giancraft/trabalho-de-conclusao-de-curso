@@ -28,6 +28,13 @@ Protótipo-base do TCC *"Sistema de apoio ao estudo médico baseado em inteligê
    por especialidade/ciclo/apresentação e as etapas da investigação em que mais falha —
    tudo calculado por regra a partir do histórico, sem LLM — com recomendações do que
    treinar a seguir ("Treinar agora" abre um simulado do tema).
+7. Em **Minha conta**, edita nome e email, baixa todos os seus dados e pode excluir a conta
+   (LGPD); o cadastro exige aceitar o termo de uso e tratamento de dados.
+8. O **administrador** vê o desempenho da IA (latência p50/p95, tokens e custo por etapa e
+   por caso, falhas, qualidade das citações, aderência ao sorteio, acerto@5 do RAG) e ajusta
+   os parâmetros técnicos (modelo, provedores, temperatura e raciocínio por etapa, janela da
+   conversa), com histórico de versões. Cada chamada ao LLM registra a versão em vigor.
+   Admin só se cria pelo servidor: `docker compose exec backend python -m auth.admin promover <email>`.
 
 ## Arquitetura
 
@@ -46,6 +53,8 @@ O backend é organizado por domínio, tudo `async` de ponta a ponta:
   prompt + validação). Provedor e modelo vêm do `.env` — ver as receitas no `.env.example`.
 - `backend/casos/router.py` — árvore de temas (`/api/temas`), simulados (`/api/simulados...`),
   casos (`/api/casos...`), histórico (`/api/conversas...`) e painel (`/api/desempenho`).
+- `backend/casos/router_admin.py` — área do administrador (`/api/admin/ia/...`); `casos/qualidade.py`
+  calcula desempenho e qualidade da IA por regra, e `auth/admin.py` promove/rebaixa admins.
 - `backend/casos/metricas.py` — métricas e recomendações do painel (regras, sem LLM) e a
   exportação anonimizada para a pesquisa: `python -m casos.metricas --exportar dados.csv`.
 - `backend/auth/router.py` — registro/login/logout com bcrypt e cookie de sessão httpOnly.

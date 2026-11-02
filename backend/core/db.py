@@ -17,7 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlmodel import SQLModel, delete, select
 
 from core import config
-from models import CasoClinico, CasoFonte, FonteReferencia, Resposta, Sessao, Simulado, Usuario, agora
+from models import (
+    CasoClinico,
+    CasoFonte,
+    ChamadaIA,
+    ConfiguracaoIA,
+    FonteReferencia,
+    Resposta,
+    Sessao,
+    Simulado,
+    Usuario,
+    agora,
+)
 
 engine = create_async_engine(config.DATABASE_URL, pool_pre_ping=True)
 
@@ -33,8 +44,12 @@ async def get_session():
 # --- usuários e sessões de autenticação ---
 
 
-async def criar_usuario(s: AsyncSession, nome: str, email: str, senha_hash: bytes) -> int:
-    usuario = Usuario(nome=nome, email=email.lower(), senha_hash=senha_hash)
+async def criar_usuario(
+    s: AsyncSession, nome: str, email: str, senha_hash: bytes, consentiu: bool = False
+) -> int:
+    usuario = Usuario(
+        nome=nome, email=email.lower(), senha_hash=senha_hash, consentiu_em=agora() if consentiu else None
+    )
     s.add(usuario)
     await s.commit()
     return usuario.id
@@ -44,6 +59,55 @@ async def buscar_usuario_por_email(s: AsyncSession, email: str) -> Usuario | Non
     return (
         await s.execute(select(Usuario).where(Usuario.email == email.lower()))
     ).scalar_one_or_none()
+
+
+async def atualizar_usuario(s: AsyncSession, usuario_id: int, nome: str, email: str) -> None:
+    usuario = await s.get(Usuario, usuario_id)
+    usuario.nome, usuario.email = nome, email.lower()
+    await s.commit()
+
+
+async def registrar_consentimento(s: AsyncSession, usuario_id: int) -> None:
+    usuario = await s.get(Usuario, usuario_id)
+    usuario.consentiu_em = agora()
+    await s.commit()
+
+
+async def definir_papel(s: AsyncSession, email: str, papel: str) -> bool:
+    """Promove ou rebaixa pelo email (CLI `auth.admin`); False se não existe."""
+    usuario = await buscar_usuario_por_email(s, email)
+    if usuario is None:
+        return False
+    usuario.papel = papel
+    await s.commit()
+    return True
+
+
+async def apagar_usuario(s: AsyncSession, usuario_id: int) -> None:
+    """Exclusão da conta (LGPD): sessões, casos, simulados e chamadas vão junto, pelas FKs
+    em CASCADE; versões de configuração que ele salvou ficam, sem o autor."""
+    await s.execute(delete(Usuario).where(Usuario.id == usuario_id))
+    await s.commit()
+
+
+async def dados_do_usuario(s: AsyncSession, usuario_id: int) -> dict:
+    """Tudo o que o sistema guarda do usuário, legível (LGPD, direito de acesso)."""
+    usuario = await s.get(Usuario, usuario_id)
+    casos = await listar_casos(s, usuario_id)
+    respostas = defaultdict(list)
+    for r in (await s.execute(
+        select(Resposta).where(Resposta.caso_id.in_([c.id for c in casos])).order_by(Resposta.id)
+    )).scalars():
+        respostas[r.caso_id].append({"papel": r.role, "texto": r.content, "em": r.criada_em.isoformat()})
+    return {
+        "conta": {"nome": usuario.nome, "email": usuario.email, "criada_em": usuario.criado_em.isoformat(),
+                  "consentiu_em": usuario.consentiu_em.isoformat() if usuario.consentiu_em else None},
+        "casos": [
+            {"id": c.id, "titulo": c.titulo, "especialidade": c.especialidade, "ciclo": c.ciclo, "status": c.status,
+             "criado_em": c.criada_em.isoformat(), "feedback": c.feedback, "mensagens": respostas[c.id]}
+            for c in casos
+        ],
+    }
 
 
 async def criar_sessao(
@@ -183,6 +247,72 @@ async def historico_de_desempenho(s: AsyncSession, usuario_id: int | None = None
         }
         for c, f in linhas
     ]
+
+
+# --- telemetria e configuração da IA ---
+
+
+async def registrar_chamadas(
+    s: AsyncSession, chamadas: list[dict], caso_id: str | None, usuario_id: int | None
+) -> None:
+    """Grava as chamadas ao LLM coletadas numa requisição (`casos.ai.coletar`)."""
+    if chamadas:
+        s.add_all(ChamadaIA(**c, caso_id=caso_id, usuario_id=usuario_id) for c in chamadas)
+        await s.commit()
+
+
+async def chamadas_desde(s: AsyncSession, desde: datetime) -> list[dict]:
+    """Telemetria do período, como dicts para `casos.qualidade.desempenho`."""
+    linhas = (await s.execute(select(ChamadaIA).where(ChamadaIA.criada_em >= desde))).scalars()
+    return [c.model_dump() for c in linhas]
+
+
+async def casos_para_qualidade(s: AsyncSession) -> list[dict]:
+    """Casos encerrados com o gabarito, a fonte sorteada ([1]) e os números das fontes que
+    foram ao prompt da avaliação — a entrada de `casos.qualidade.avaliar`."""
+    linhas = (await s.execute(
+        select(CasoClinico, FonteReferencia)
+        .outerjoin(CasoFonte, (CasoFonte.caso_id == CasoClinico.id) & (CasoFonte.etapa == "caso") & (CasoFonte.numero == 1))
+        .outerjoin(FonteReferencia, FonteReferencia.id == CasoFonte.fonte_id)
+        .where(CasoClinico.status == "encerrada")
+    )).all()
+    numeros = defaultdict(set)
+    for caso_id, numero in await s.execute(
+        select(CasoFonte.caso_id, CasoFonte.numero).where(
+            CasoFonte.etapa == "feedback", CasoFonte.caso_id.in_([c.id for c, _ in linhas])
+        )
+    ):
+        numeros[caso_id].add(numero)
+    return [
+        {"feedback": c.feedback, "gabarito": c.gabarito, "ciclo": c.ciclo, "tipo": f.tipo if f else "",
+         "titulo_fonte": f.titulo if f else "", "fontes_feedback": numeros[c.id]}
+        for c, f in linhas
+    ]
+
+
+async def configuracao_atual(s: AsyncSession) -> ConfiguracaoIA | None:
+    return (
+        await s.execute(select(ConfiguracaoIA).order_by(ConfiguracaoIA.id.desc()).limit(1))
+    ).scalar_one_or_none()
+
+
+async def salvar_configuracao(s: AsyncSession, dados: dict, usuario_id: int | None) -> ConfiguracaoIA:
+    versao = ConfiguracaoIA(dados=dados, criado_por=usuario_id)
+    s.add(versao)
+    await s.commit()
+    return versao
+
+
+async def historico_configuracao(s: AsyncSession, limite: int = 20) -> list[tuple[ConfiguracaoIA, str | None]]:
+    """Versões, da mais nova para a mais antiga, com o nome de quem salvou."""
+    return list(
+        await s.execute(
+            select(ConfiguracaoIA, Usuario.nome)
+            .outerjoin(Usuario, Usuario.id == ConfiguracaoIA.criado_por)
+            .order_by(ConfiguracaoIA.id.desc())
+            .limit(limite)
+        )
+    )
 
 
 async def fontes_do_caso(
@@ -390,6 +520,40 @@ if __name__ == "__main__":
             assert hist["pcdt-ic"]["grande_area"] == "Clínica Médica" and "" in hist, "caso sem fonte entra vazio"
             assert await historico_de_desempenho(s, usuario_id=999) == []
 
-        print("OK: CRUD de usuários, sessões, casos clínicos, simulados e respostas passa.")
+            # Conta: edição, consentimento, papel e exportação dos dados.
+            assert (await s.get(Usuario, uid)).consentiu_em is None, "sem aceite por padrão"
+            await registrar_consentimento(s, uid)
+            await atualizar_usuario(s, uid, "Novo Nome", "Novo@Exemplo.com")
+            u = await s.get(Usuario, uid)
+            assert (u.nome, u.email, u.papel) == ("Novo Nome", "novo@exemplo.com", "estudante") and u.consentiu_em
+            assert await definir_papel(s, "NOVO@exemplo.com", "admin") and (await s.get(Usuario, uid)).papel == "admin"
+            assert not await definir_papel(s, "ninguem@x", "admin")
+            dados = await dados_do_usuario(s, uid)
+            assert dados["conta"]["email"] == "novo@exemplo.com" and dados["casos"][0]["mensagens"]
+
+            # Telemetria e configuração: versões em ordem, a mais nova vale.
+            v1 = await salvar_configuracao(s, {"modelo": "a"}, uid)
+            v2 = await salvar_configuracao(s, {"modelo": "b"}, uid)
+            assert (await configuracao_atual(s)).id == v2.id
+            assert [(v.id, autor) for v, autor in await historico_configuracao(s)] == [(v2.id, "Novo Nome"), (v1.id, "Novo Nome")]
+            chamada = {"etapa": "chat", "modelo": "m", "configuracao_id": v2.id, "tokens_entrada": 10, "tokens_cache": 0,
+                       "tokens_saida": 5, "custo": 0.01, "latencia_ms": 900, "tentativas": 1, "ok": True, "erro": None}
+            await registrar_chamadas(s, [chamada, {**chamada, "etapa": "feedback"}], hid, uid)
+            assert {c["etapa"] for c in await chamadas_desde(s, agora() - timedelta(hours=1))} == {"chat", "feedback"}
+            encerrado = await criar_caso(s, uid, "q", "Cardiologia", "clínico", {"diagnostico": "IC"}, fontes=[(fonte.id, 1, [])])
+            await encerrar_caso(s, encerrado, {"acertou": True}, fontes=[(fonte.id, 1, [])])
+            [q] = [c for c in await casos_para_qualidade(s) if c["gabarito"] == {"diagnostico": "IC"}]
+            assert q["titulo_fonte"] == "Insuficiência cardíaca" and q["fontes_feedback"] == {1}
+
+            # Exclusão da conta (LGPD): casos, chamadas e sessões vão junto; a configuração fica.
+            await criar_sessao(s, "tok3", uid)
+            await apagar_usuario(s, uid)
+            s.expire_all()
+            assert await s.get(Usuario, uid) is None and await listar_casos(s, uid) == []
+            assert await chamadas_desde(s, agora() - timedelta(hours=1)) == [], "chamadas apagadas em cascata"
+            assert await usuario_da_sessao(s, "tok3") is None
+            assert (await configuracao_atual(s)).criado_por is None, "versão fica, sem o autor"
+
+        print("OK: CRUD de usuários, sessões, casos, simulados, respostas, conta, telemetria e configuração.")
 
     asyncio.run(principal())

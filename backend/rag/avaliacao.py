@@ -25,6 +25,11 @@ CONSULTAS = [
     ("tosse produtiva crônica e dispneia progressiva em tabagista de longa data", "doenca-pulmonar-obstrutiva-cronica"),
     ("fadiga, palidez e unhas quebradiças em mulher com menstruação abundante", "anemia-deficiencia-de-ferro"),
     ("episódios de euforia, pouca necessidade de sono e gastos excessivos alternando com depressão", "transtorno-afetivo-bipolar"),
+    # Manuais do MS (temas comuns sem PCDT) e mais temas de residência.
+    ("tosse produtiva há mais de três semanas, febre vespertina, sudorese noturna e emagrecimento", "manual-de-recomendacoes-para-o-controle-da-tuberculose"),
+    ("febre alta súbita, dor retro-orbitária, mialgia e exantema; prova do laço positiva", "dengue-diagnostico"),
+    ("dispneia aos esforços progressiva, ortopneia e edema de membros inferiores com fração de ejeção baixa", "insuficiencia-cardiaca"),
+    ("crises de sibilância desde a infância com despertares noturnos e uso frequente de broncodilatador", "asma"),
 ]
 K = 5
 

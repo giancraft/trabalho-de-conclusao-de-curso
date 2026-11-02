@@ -103,8 +103,8 @@ def _historico(respostas: list[Resposta]) -> list[dict]:
 _gravacoes: set[asyncio.Task] = set()
 
 
-def _gravar_resposta_em_background(caso_id: str, texto: str) -> None:
-    """Persiste a resposta do assistente fora da task da request.
+def _gravar_em_background(gravar) -> None:
+    """Roda `gravar(sessao)` fora da task da request — a resposta do chat e a telemetria.
 
     Quando o cliente desconecta no meio do stream, o Starlette cancela a task da
     request. O `finally` do gerador chega a rodar, mas qualquer `await` ali dentro é
@@ -114,11 +114,11 @@ def _gravar_resposta_em_background(caso_id: str, texto: str) -> None:
     Uma task própria não herda esse cancelamento e completa a gravação.
     """
 
-    async def gravar() -> None:
+    async def tarefa_() -> None:
         async with db.abrir_sessao() as sessao:
-            await db.adicionar_resposta(sessao, caso_id, "assistant", texto)
+            await gravar(sessao)
 
-    tarefa = asyncio.create_task(gravar())
+    tarefa = asyncio.create_task(tarefa_())
     _gravacoes.add(tarefa)
     tarefa.add_done_callback(_gravacoes.discard)
 
@@ -273,10 +273,13 @@ async def _abrir_caso(
         if trechos := await busca.material(s, apoio, "caso", principal=False):
             blocos.append((apoio, trechos))
     numerados = [(n, f, ts) for n, (f, ts) in enumerate(blocos, 1)]
-    try:
-        caso = await ai.novo_caso(fonte.especialidade, ciclo, fonte.titulo, busca.contexto(numerados), relato=relato)
-    except Exception as e:  # noqa: BLE001 — erro amigável, sem stack trace no cliente
-        raise HTTPException(502, _falha_ia(e, "gerar o caso"))
+    with ai.coletar() as chamadas:
+        try:
+            caso = await ai.novo_caso(fonte.especialidade, ciclo, fonte.titulo, busca.contexto(numerados), relato=relato)
+        except Exception as e:  # noqa: BLE001 — erro amigável, sem stack trace no cliente
+            # A falha também é medida: o caso não chega a existir, a chamada fica sem ele.
+            await db.registrar_chamadas(s, chamadas, None, usuario_id)
+            raise HTTPException(502, _falha_ia(e, "gerar o caso"))
 
     caso_id = await db.criar_caso(
         s,
@@ -289,6 +292,7 @@ async def _abrir_caso(
         simulado_id=simulado.id,
         ordem=ordem,
     )
+    await db.registrar_chamadas(s, chamadas, caso_id, usuario_id)
     apresentacao = f"{caso.apresentacao}\n\n{AVISO_RELATO}" if relato else caso.apresentacao
     await db.adicionar_resposta(s, caso_id, "assistant", apresentacao)
     return CasoAberto(
@@ -400,22 +404,29 @@ async def conversar(
     especialidade, gabarito = caso.especialidade, caso.gabarito
     historico = _historico(respostas)
 
+    usuario_id = usuario.id
+
     async def gerar():
         partes = []
-        try:
-            async for chunk in ai.responder_chat(
-                especialidade, gabarito, historico, corpo.mensagem
-            ):
-                partes.append(chunk)
-                yield chunk
-        except Exception as e:  # noqa: BLE001 — stream já aberto; erro vira texto no chat
-            yield f"\n\n*{_falha_ia(e, 'responder')}*"
-        finally:
-            # Sem `await` aqui: numa desconexão este bloco roda com a task já cancelada,
-            # e qualquer espera seria interrompida na hora. Ver a docstring de
-            # _gravar_resposta_em_background.
-            if partes:
-                _gravar_resposta_em_background(caso_id, "".join(partes))
+        # A coleta abre aqui dentro: o gerador roda depois que a rota retornou.
+        with ai.coletar() as chamadas:
+            try:
+                async for chunk in ai.responder_chat(
+                    especialidade, gabarito, historico, corpo.mensagem
+                ):
+                    partes.append(chunk)
+                    yield chunk
+            except Exception as e:  # noqa: BLE001 — stream já aberto; erro vira texto no chat
+                yield f"\n\n*{_falha_ia(e, 'responder')}*"
+            finally:
+                # Sem `await` aqui: numa desconexão este bloco roda com a task já
+                # cancelada, e qualquer espera seria interrompida na hora. Ver a
+                # docstring de _gravar_em_background.
+                texto, feitas = "".join(partes), list(chamadas)
+                if texto:
+                    _gravar_em_background(lambda sessao: db.adicionar_resposta(sessao, caso_id, "assistant", texto))
+                if feitas:
+                    _gravar_em_background(lambda sessao: db.registrar_chamadas(sessao, feitas, caso_id, usuario_id))
 
     return StreamingResponse(gerar(), media_type="text/plain; charset=utf-8")
 
@@ -441,17 +452,20 @@ async def diagnosticar(
         (uso.numero, fonte, await busca.material(s, fonte, "feedback", principal=uso.numero == 1, ciclo=caso.ciclo))
         for uso, fonte in fontes_caso
     ]
-    try:
-        avaliado = await ai.avaliar_diagnostico(
-            caso.especialidade,
-            caso.ciclo,
-            caso.gabarito,
-            _historico(respostas),
-            resposta,
-            busca.contexto(blocos),
-        )
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, _falha_ia(e, "avaliar o diagnóstico"))
+    with ai.coletar() as chamadas:
+        try:
+            avaliado = await ai.avaliar_diagnostico(
+                caso.especialidade,
+                caso.ciclo,
+                caso.gabarito,
+                _historico(respostas),
+                resposta,
+                busca.contexto(blocos),
+            )
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, _falha_ia(e, "avaliar o diagnóstico"))
+        finally:
+            await db.registrar_chamadas(s, chamadas, caso_id, usuario.id)
     # Ciclo básico: indica onde aprofundar a fisiologia (só a referência; ver rag/fisiologia.json).
     leitura = ""
     if caso.ciclo == "básico":
