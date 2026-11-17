@@ -174,16 +174,15 @@ ESPECIALIDADES = [
 ]
 
 # Grandes áreas das provas de residência, no topo da árvore de temas (rag/temas.py).
-# Ginecologia e Obstetrícia se divide por fonte, pela CID ou pelo MeSH; Preventiva fica
-# de fora — não gera caso diagnóstico.
-GRANDES_AREAS = ["Clínica Médica", "Cirurgia", "Ginecologia", "Obstetrícia", "Pediatria"]
+# Preventiva fica de fora — não gera caso diagnóstico.
+GRANDES_AREAS = ["Clínica Médica", "Cirurgia", "Ginecologia e Obstetrícia", "Pediatria"]
 GRANDE_AREA = {
     **{e: "Clínica Médica" for e in ESPECIALIDADES[:12]},
     "Psiquiatria": "Clínica Médica",
     "Medicina de Emergência": "Clínica Médica",
     "Medicina de Família e Comunidade": "Clínica Médica",
     "Pediatria": "Pediatria",
-    "Ginecologia e Obstetrícia": "Ginecologia",
+    "Ginecologia e Obstetrícia": "Ginecologia e Obstetrícia",
     **{e: "Cirurgia" for e in ESPECIALIDADES[ESPECIALIDADES.index("Ortopedia e Traumatologia"):]},
     "Cirurgia Geral": "Cirurgia",
 }
@@ -320,16 +319,31 @@ class CasoGerado(_Schema):
         return f'*{self.cena.strip()}*\n\n"{fala}"'
 
 
+class AvaliacaoCampo(_Schema):
+    """Avaliação de um campo da resposta final (diagnóstico, fisiopatologia, conduta...)."""
+
+    campo: Literal["diagnostico", "fisiologia", "fisiopatologia", "conduta"]
+    situacao: Literal["correto", "parcial", "incorreto"]
+    comentario: str = Field(
+        description="o que está certo, o que faltou ou está errado e a correção, com as "
+        "citações [n] quando vier das fontes"
+    )
+
+
 class Feedback(_Schema):
     acertou: bool
-    diagnostico_correto: str = Field(description="nome do diagnóstico correto")
+    diagnostico_correto: str = Field(description="nome completo do diagnóstico correto")
+    por_campo: list[AvaliacaoCampo] = Field(
+        description="um item por campo da resposta final, na ordem pedida"
+    )
     acertos: list[str] = Field(
-        description="o que o estudante fez ou concluiu corretamente, só o que está nas "
-        "mensagens [ESTUDANTE]; o que o caso já entregou não conta como mérito"
+        description="o que o estudante fez certo NA INVESTIGAÇÃO (perguntas, exame físico, "
+        "exames pedidos e interpretados), só o que está nas mensagens [ESTUDANTE]; o que "
+        "o caso já entregou não conta como mérito"
     )
     inconsistencias: list[str] = Field(
-        description="erros ou afirmações incorretas do estudante, cada um com a correção; "
-        "lista vazia se não houver"
+        description="erros ou afirmações incorretas do estudante NA INVESTIGAÇÃO, cada um "
+        "com a correção; lista vazia se não houver"
     )
     # O nome ficou de quando o campo listava diferenciais; mudar quebraria os feedbacks já
     # gravados. Hoje são lacunas da conduta — listar doenças tirava o foco do caso sorteado.
@@ -358,6 +372,7 @@ class FeedbackLeitura(Feedback):
     """
 
     conduta_referencia: list[str] = []
+    por_campo: list[AvaliacaoCampo] = []  # feedbacks anteriores à avaliação por tópico
     leitura_indicada: str = ""
 
 
@@ -933,6 +948,49 @@ def texto_resposta(resposta: dict[str, str]) -> str:
     return "\n\n".join(f"{ROTULOS[c]}: {resposta[c].strip()}" for c in ROTULOS if resposta.get(c, "").strip())
 
 
+def _instrucao_por_campo(ciclo: str) -> str:
+    campos = CAMPOS_POR_CICLO[ciclo]
+    return (
+        f"por_campo tem EXATAMENTE {len(campos)} itens, um para cada campo da resposta "
+        f"final, nesta ordem: {', '.join(campos)} — nenhum pode faltar, mesmo que o "
+        "estudante tenha deixado o campo curto. Para cada um, a situacao e um comentario "
+        "com o que está certo, o que faltou ou está errado e a correção.\n"
+        "No campo diagnostico, julgue a DOENÇA, não a completude do nome:\n"
+        "- correto: o estudante nomeia a doença do gabarito com o nome completo;\n"
+        "- parcial: é a mesma doença, mas sem o subtipo, a forma clínica, a classificação ou "
+        "a etiologia (ex.: 'Hiperplasia adrenal congênita' para 'hiperplasia adrenal "
+        "congênita clássica perdedora de sal por deficiência de 21-hidroxilase'). Conta como "
+        "acerto: no comentario, diga o nome completo como ponto de melhoria;\n"
+        "- incorreto: só quando é outra doença ou um termo genérico que não identifica a "
+        "condição (ex.: 'endocrinopatia').\n"
+        "Diagnósticos diferenciais: se o estudante citou algum, o comentario do diagnostico "
+        "DEVE dizer, nomeando cada um, se é pertinente para este caso e por quê, e apontar "
+        "o diferencial importante que faltou. Se não citou nenhum, aponte os 1–2 "
+        "diferenciais principais que ele deveria ter considerado.\n"
+        "acertou é true se o diagnostico não for incorreto — fisiopatologia e conduta não "
+        "mudam o acerto, só o comentário de cada uma."
+    )
+
+
+def _consolidar(fb: Feedback, ciclo: str, validos: set[int]) -> Feedback:
+    """Põe `por_campo` na forma do formulário do ciclo e decide `acertou` por regra.
+
+    Fica só um item por campo do ciclo, na ordem do formulário (o modelo às vezes repete
+    ou inventa um campo), com as citações filtradas. `acertou` sai da situação do
+    diagnóstico — nome incompleto ("parcial") é acerto — e não do campo `acertou` do
+    modelo, que pode contradizer a própria avaliação. Sem item de diagnóstico, vale o do
+    modelo.
+    """
+    por_campo = {}
+    for a in fb.por_campo:
+        if a.campo in CAMPOS_POR_CICLO[ciclo]:
+            por_campo.setdefault(a.campo, a.model_copy(update={"comentario": filtrar_citacoes(a.comentario, validos)}))
+    ordem = [por_campo[c] for c in CAMPOS_POR_CICLO[ciclo] if c in por_campo]
+    diagnostico = por_campo.get("diagnostico")
+    acertou = diagnostico.situacao != "incorreto" if diagnostico else fb.acertou
+    return fb.model_copy(update={"por_campo": ordem, "acertou": acertou})
+
+
 async def avaliar_diagnostico(
     especialidade: str,
     ciclo: str,
@@ -969,6 +1027,8 @@ RESPOSTA FINAL DO ESTUDANTE:
 
 {RUBRICA[ciclo]}
 
+{_instrucao_por_campo(ciclo)}
+
 Avalie o raciocínio ao longo da investigação e a resposta final. Julgue só o que o
 estudante escreveu nas mensagens [ESTUDANTE]: o que o [CASO] informou não é mérito dele,
 e o que ele não descreveu não foi feito. A ficha do gabarito mostra o que havia para
@@ -981,6 +1041,7 @@ descobrir. Seja construtivo e explicativo; não atribua nota numérica.{_referen
         ],
     )
     validos = set(map(int, _FONTE_NUMERADA.findall(contexto)))
+    fb = _consolidar(fb, ciclo, validos)
     return fb.model_copy(
         update={
             "acertos": [filtrar_citacoes(t, validos) for t in fb.acertos],
@@ -1253,6 +1314,34 @@ if __name__ == "__main__":
     antigo = FeedbackLeitura.model_validate({"acertou": True, "diagnostico_correto": "IC", "acertos": [],
         "inconsistencias": [], "hipoteses_nao_consideradas": [], "justificativa_pedagogica": "j"})
     assert antigo.conduta_referencia == [] and antigo.leitura_indicada == "", "feedback anterior aos ciclos"
+    assert antigo.por_campo == [], "feedback anterior à avaliação por tópico"
+
+    # 10. Avaliação por tópico: forma do formulário e acerto pela situação do diagnóstico.
+    def fb_com(acertou, *itens):
+        return Feedback(acertou=acertou, diagnostico_correto="HAC clássica perdedora de sal", acertos=[],
+                        inconsistencias=[], hipoteses_nao_consideradas=[], justificativa_pedagogica="j",
+                        conduta_referencia=[], por_campo=[AvaliacaoCampo(campo=c, situacao=st, comentario=t)
+                                                          for c, st, t in itens])
+    nome_incompleto = _consolidar(fb_com(
+        False,  # o modelo disse que errou, mas a própria avaliação diz que a doença está certa
+        ("conduta", "incorreto", "Faltou hidrocortisona [1] [7]"),
+        ("diagnostico", "parcial", "Nome completo: forma perdedora de sal"),
+        ("fisiologia", "correto", "fora do ciclo"),
+        ("diagnostico", "incorreto", "repetido"),
+        ("fisiopatologia", "correto", "ok"),
+    ), "clínico", {1})
+    assert nome_incompleto.acertou, "nome incompleto da mesma doença é acerto"
+    assert [a.campo for a in nome_incompleto.por_campo] == ["diagnostico", "fisiopatologia", "conduta"], (
+        "ordem do formulário, só campos do ciclo, sem repetidos"
+    )
+    assert nome_incompleto.por_campo[2].comentario == "Faltou hidrocortisona [1]", "citação inválida sai"
+    assert not _consolidar(fb_com(True, ("diagnostico", "incorreto", "outra doença")), "clínico", set()).acertou
+    assert _consolidar(fb_com(True, ("conduta", "incorreto", "x")), "clínico", set()).acertou, (
+        "sem item de diagnóstico vale o do modelo; conduta não muda o acerto"
+    )
+    assert "fisiologia, fisiopatologia" in _instrucao_por_campo("básico") and "parcial" in _instrucao_por_campo("internato")
+    assert "EXATAMENTE 3 itens" in _instrucao_por_campo("clínico")
+    assert "por_campo" in _formato(Feedback)["json_schema"]["schema"]["required"]
     assert "EVOLUÇÃO" in tutor, "a evolução da ficha vai para o tutor"
 
     print("OK: parser, janela, schema strict, gabarito, referência, citações, provedor, ciclos, telemetria e configuração.")

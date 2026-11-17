@@ -16,6 +16,7 @@ from sqlmodel import select
 
 from auth.router import usuario_atual
 from casos import ai, metricas
+from casos import revisao as revisao_espacada
 from core import db
 from models import (
     CasoAberto,
@@ -28,6 +29,7 @@ from models import (
     FonteReferencia,
     ItemSimulado,
     ListaCasos,
+    Revisao,
     Opcoes,
     Resposta,
     SecaoConsultada,
@@ -65,6 +67,7 @@ class NovoSimulado(BaseModel):
     selecao: list[str] = Field(min_length=1)  # ids dos nós da árvore (rag/temas.py)
     ciclo: str
     quantidade: int = Field(ge=1, le=10)
+    um_por_no: bool = False  # revisão: um caso de cada tema marcado, na ordem
 
 
 class Mensagem(BaseModel):
@@ -192,17 +195,42 @@ async def desempenho(
     usuario: Usuario = Depends(usuario_atual), s: AsyncSession = Depends(db.get_session)
 ):
     """Painel do estudante: KPIs, evolução, recortes e o que estudar a seguir (RF10, RF11)."""
-    F = FonteReferencia
     casos = await db.historico_de_desempenho(s, usuario.id)
-    # Temas sorteáveis do mais ao menos importante: base do "ainda não praticado".
+    importantes, info = await _temas_do_painel(s, casos)
+    nomes = {t: i["nome"] for t, i in info.items()}
+    return Desempenho(**metricas.resumir(casos, importantes, nomes, agora()))
+
+
+async def _temas_do_painel(s: AsyncSession, casos: list[dict]) -> tuple[list[dict], dict[str, dict]]:
+    """Temas sorteáveis do mais ao menos importante (base do "ainda não praticado") e
+    nome/especialidade/peso dos temas do histórico."""
+    F = FonteReferencia
     importantes = [
         {"id": f"t:{chave}", "nome": titulo}
         for chave, titulo in await s.execute(
             select(F.chave, F.titulo).where(F.sorteavel, F.tipo.in_(temas.CONDICOES)).order_by(F.peso.desc()).limit(40)
         )
     ]
-    nomes = dict((await s.execute(select(F.chave, F.titulo).where(F.chave.in_({c["tema"] for c in casos})))).all())
-    return Desempenho(**metricas.resumir(casos, importantes, nomes, agora()))
+    info = {
+        chave: {"nome": titulo, "especialidade": esp, "peso": peso}
+        for chave, titulo, esp, peso in await s.execute(
+            select(F.chave, F.titulo, F.especialidade, F.peso).where(F.chave.in_({c["tema"] for c in casos}))
+        )
+    }
+    return importantes, info
+
+
+@router.get("/revisao", response_model=Revisao)
+async def revisao(usuario: Usuario = Depends(usuario_atual), s: AsyncSession = Depends(db.get_session)):
+    """Revisão espaçada por tema (RF09, `casos/revisao.py`) e o que estudar a seguir (RF11)."""
+    casos = await db.historico_de_desempenho(s, usuario.id)
+    importantes, info = await _temas_do_painel(s, casos)
+    nomes = {t: i["nome"] for t, i in info.items()}
+    agora_ = agora()
+    return Revisao(
+        **revisao_espacada.montar(revisao_espacada.agenda(casos, info, agora_.date())),
+        recomendacoes=metricas.resumir(casos, importantes, nomes, agora_)["recomendacoes"],
+    )
 
 
 @router.get("/conversas", response_model=ListaCasos)
@@ -321,7 +349,7 @@ async def criar_simulado(
     """
     if corpo.ciclo not in ai.CICLOS:
         raise HTTPException(422, f"Ciclo inválido: {corpo.ciclo}")
-    fila = await busca.sortear_fila(s, corpo.selecao, corpo.quantidade, usuario.id)
+    fila = await busca.sortear_fila(s, corpo.selecao, corpo.quantidade, usuario.id, um_por_no=corpo.um_por_no)
     if not fila:
         raise HTTPException(422, "Nenhum caso disponível nos temas marcados.")
     simulado_id = await db.criar_simulado(s, usuario.id, corpo.ciclo, corpo.selecao, [f.id for f in fila])

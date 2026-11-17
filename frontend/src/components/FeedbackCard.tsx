@@ -7,6 +7,7 @@ import {
   GraduationCap,
   Library,
   ListOrdered,
+  MinusCircle,
   XCircle,
 } from 'lucide-react'
 import type { Feedback, Fonte } from '../types'
@@ -76,6 +77,46 @@ function Secao({
           ))}
         </ul>
       )}
+    </div>
+  )
+}
+
+const TOPICO: Record<string, string> = {
+  diagnostico: 'Diagnóstico',
+  fisiologia: 'Fisiologia normal',
+  fisiopatologia: 'Fisiopatologia',
+  conduta: 'Conduta',
+}
+// Situação sempre com ícone e texto, nunca só a cor.
+const SITUACAO = {
+  correto: { rotulo: 'Correto', icone: CheckCircle2, cor: 'text-green-700', fundo: 'border-green-200 bg-green-50/50' },
+  parcial: { rotulo: 'Parcial', icone: MinusCircle, cor: 'text-amber-700', fundo: 'border-amber-200 bg-amber-50/50' },
+  incorreto: { rotulo: 'Incorreto', icone: XCircle, cor: 'text-red-700', fundo: 'border-red-200 bg-red-50/50' },
+}
+
+/** Um bloco por campo da resposta final (diagnóstico, fisiopatologia, conduta...). */
+function PorTopico({ itens }: { itens: Feedback['por_campo'] }) {
+  if (!itens?.length) return null
+  return (
+    <div className="space-y-2">
+      <h4 className="text-sm font-semibold text-zinc-900">Sua resposta, por tópico</h4>
+      {itens.map((a) => {
+        const s = SITUACAO[a.situacao]
+        return (
+          <div key={a.campo} className={`rounded-lg border px-3 py-2.5 ${s.fundo}`}>
+            <p className="flex items-center justify-between gap-2 text-sm font-medium text-zinc-900">
+              {TOPICO[a.campo] ?? a.campo}
+              <span className={`inline-flex items-center gap-1 text-xs font-medium ${s.cor}`}>
+                <s.icone className="h-3.5 w-3.5" aria-hidden />
+                {s.rotulo}
+              </span>
+            </p>
+            <p className="mt-1 text-sm leading-relaxed text-zinc-700">
+              <ComCitacoes texto={a.comentario} />
+            </p>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -223,6 +264,9 @@ function Referencias({ fontes }: { fontes: Fonte[] }) {
 }
 
 export default function FeedbackCard({ fb, fontes }: { fb: Feedback; fontes: Fonte[] }) {
+  // Nome incompleto da doença certa: é acerto, com o nome completo como melhoria.
+  const nomeIncompleto = fb.acertou && fb.por_campo?.find((a) => a.campo === 'diagnostico')?.situacao === 'parcial'
+  const porTopico = (fb.por_campo?.length ?? 0) > 0
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center gap-2 border-b border-zinc-100 pb-3">
@@ -235,15 +279,25 @@ export default function FeedbackCard({ fb, fontes }: { fb: Feedback; fontes: Fon
           fb.acertou ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'
         }`}
       >
-        {fb.acertou ? 'Diagnóstico correto: ' : 'Diagnóstico correto era: '}
+        {nomeIncompleto
+          ? 'Diagnóstico correto. Nome completo: '
+          : fb.acertou
+            ? 'Diagnóstico correto: '
+            : 'Diagnóstico correto era: '}
         {fb.diagnostico_correto}
       </div>
 
       <div className="space-y-4">
-        <Secao icone={CheckCircle2} titulo="Acertos" cor="text-green-700" itens={fb.acertos} />
+        <PorTopico itens={fb.por_campo} />
+        <Secao
+          icone={CheckCircle2}
+          titulo={porTopico ? 'Acertos na investigação' : 'Acertos'}
+          cor="text-green-700"
+          itens={fb.acertos}
+        />
         <Secao
           icone={XCircle}
-          titulo="Inconsistências"
+          titulo={porTopico ? 'Inconsistências na investigação' : 'Inconsistências'}
           cor="text-red-700"
           itens={fb.inconsistencias}
           vazio="Nenhuma inconsistência."

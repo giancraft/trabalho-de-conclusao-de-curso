@@ -22,17 +22,17 @@ const ROTULOS: Record<Campo, string> = {
 // dizem o que o campo pede — nunca sugerem conteúdo.
 const CAMPOS: Record<string, { campo: Campo; dica: string }[]> = {
   básico: [
-    { campo: 'diagnostico', dica: 'Seu diagnóstico e o raciocínio que leva a ele.' },
+    { campo: 'diagnostico', dica: 'Seu diagnóstico, o raciocínio que leva a ele e diagnósticos diferenciais.' },
     { campo: 'fisiologia', dica: 'Como o órgão ou sistema acometido funciona normalmente.' },
     { campo: 'fisiopatologia', dica: 'O que a doença altera nesse funcionamento e como isso explica os achados.' },
   ],
   clínico: [
-    { campo: 'diagnostico', dica: 'Seu diagnóstico e o raciocínio que leva a ele.' },
+    { campo: 'diagnostico', dica: 'Seu diagnóstico, o raciocínio que leva a ele e diagnósticos diferenciais.' },
     { campo: 'fisiopatologia', dica: 'O mecanismo da doença e como ele explica os achados.' },
     { campo: 'conduta', dica: 'Tratamento: medidas, fármacos ou classes de escolha e metas.' },
   ],
   internato: [
-    { campo: 'diagnostico', dica: 'Seu diagnóstico e o raciocínio que leva a ele.' },
+    { campo: 'diagnostico', dica: 'Seu diagnóstico, o raciocínio que leva a ele e diagnósticos diferenciais.' },
     { campo: 'fisiopatologia', dica: 'O mecanismo da doença e como ele explica os achados.' },
     { campo: 'conduta', dica: 'Conduta passo a passo: medidas, fármacos, doses, vias, volumes e monitorização.' },
   ],

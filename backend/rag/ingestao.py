@@ -306,7 +306,7 @@ async def ingerir() -> None:
         # que perdeu a especialidade fica com "" e nunca mais é sorteado (apagar quebraria
         # o RF14 dos casos que o usaram).
         catalogo = {r["chave"]: r for r in carregar() + literatura.carregar()}
-        arvore = temas.classificar(list(catalogo.values()), apoio.carregar(), temas.arvores_mesh())
+        arvore = temas.classificar(list(catalogo.values()), apoio.carregar())
         for chave in existentes & catalogo.keys():
             r = catalogo[chave]
             area, tema = arvore.get(chave, ("", ""))

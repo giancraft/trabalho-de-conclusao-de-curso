@@ -1,7 +1,7 @@
-import { Activity, BarChart3, Check, LogOut, Plus, Settings2, ShieldAlert, Stethoscope, Trash2 } from 'lucide-react'
+import { Activity, BarChart3, Check, LogOut, Plus, RotateCcw, Settings2, ShieldAlert, Stethoscope, Trash2 } from 'lucide-react'
 import type { ConversaResumo, Usuario } from '../types'
 
-export type Tela = 'caso' | 'desempenho' | 'conta' | 'admin-ia' | 'config-ia'
+export type Tela = 'caso' | 'revisao' | 'desempenho' | 'conta' | 'admin-ia' | 'config-ia'
 
 interface Props {
   ocupado: boolean
@@ -72,6 +72,7 @@ export default function Sidebar({
         <nav className="mt-2 space-y-0.5">
           {(
             [
+              ['revisao', 'Revisão', RotateCcw],
               ['desempenho', 'Meu desempenho', BarChart3],
               // Itens do administrador: a interface só esconde; quem protege é o backend (403).
               ...(usuario.papel === 'admin'

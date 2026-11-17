@@ -97,9 +97,16 @@ async def sortear_fonte(
 
 
 async def sortear_fila(
-    s: AsyncSession, selecao: list[str], n: int, usuario_id: int | None = None
+    s: AsyncSession, selecao: list[str], n: int, usuario_id: int | None = None, um_por_no: bool = False
 ) -> list[FonteReferencia]:
-    """n sorteios com reposição: a fila de um simulado. Seleção vazia → []."""
+    """n sorteios com reposição: a fila de um simulado. Seleção vazia → [].
+
+    `um_por_no`: um caso de cada nó, na ordem (a revisão espaçada garante que cada tema
+    da sessão apareça); `n` é ignorado. Dentro do nó, o sorteio é o de sempre.
+    """
+    if um_por_no:
+        sorteadas = [await sortear_fonte(s, [no], usuario_id) for no in selecao]
+        return [f for f in sorteadas if f]
     fila = []
     for _ in range(n):
         if not (fonte := await sortear_fonte(s, selecao, usuario_id, ja=[f.id for f in fila])):
@@ -314,6 +321,9 @@ if __name__ == "__main__":
             # Fila do simulado: com reposição — tema de uma fonte só ainda dá n casos.
             assert [f.chave for f in await sortear_fila(s, ["t:fa"], 3, uid)] == ["fa", "fa", "fa"]
             assert await sortear_fila(s, [], 3, uid) == []
+            # Revisão: um caso de cada tema, na ordem; tema sem fonte some.
+            revisao = await sortear_fila(s, ["t:fa", "t:nada", "t:iam"], 99, uid, um_por_no=True)
+            assert [f.tema for f in revisao] == ["fa", "iam"], "um de cada, na ordem; n ignorado"
 
             # Seções do PCDT e material por tipo de fonte.
             ts = await trechos_da_fonte(s, iam.id, SECOES_CASO)

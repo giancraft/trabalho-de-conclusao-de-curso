@@ -399,6 +399,7 @@ class Desempenho(BaseModel):
     por_tema: list[Grupo]
     por_ciclo: list[Grupo]
     por_apresentacao: list[Grupo]
+    por_topico: list[Grupo]  # acerto por campo da resposta final (diagnóstico, conduta...)
     lacunas: list[LacunaPorEtapa]
     recomendacoes: list[Recomendacao]
 
@@ -469,3 +470,26 @@ class ConfiguracaoLeitura(BaseModel):
     versao_id: int | None  # None: valendo o padrão do código
     padrao: ConfigIA
     historico: list[VersaoConfig]
+
+
+# --- revisão espaçada por tema (casos/revisao.py) ---
+
+
+class ItemRevisao(BaseModel):
+    no: str  # nó da árvore ("t:<tema>"), para gerar os casos da revisão
+    nome: str
+    especialidade: str
+    proxima: date
+    intervalo_dias: int
+    atraso_dias: int  # ≥ 0: vencido
+    ultimo_acertou: bool
+    tentativas: int
+    acertos: int
+
+
+class Revisao(BaseModel):
+    vencidos: list[ItemRevisao]
+    sessoes_normais: list[list[ItemRevisao]]  # 3 temas, um caso de cada
+    sessoes_express: list[list[ItemRevisao]]  # 1 tema
+    proximas: list[ItemRevisao]
+    recomendacoes: list[Recomendacao]

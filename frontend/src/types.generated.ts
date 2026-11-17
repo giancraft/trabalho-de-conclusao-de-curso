@@ -175,6 +175,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/revisao": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Revisao
+         * @description Revisão espaçada por tema (RF09, `casos/revisao.py`) e o que estudar a seguir (RF11).
+         */
+        get: operations["revisao_api_revisao_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/conversas": {
         parameters: {
             query?: never;
@@ -404,6 +424,27 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AvaliacaoCampo
+         * @description Avaliação de um campo da resposta final (diagnóstico, fisiopatologia, conduta...).
+         */
+        AvaliacaoCampo: {
+            /**
+             * Campo
+             * @enum {string}
+             */
+            campo: "diagnostico" | "fisiologia" | "fisiopatologia" | "conduta";
+            /**
+             * Situacao
+             * @enum {string}
+             */
+            situacao: "correto" | "parcial" | "incorreto";
+            /**
+             * Comentario
+             * @description o que está certo, o que faltou ou está errado e a correção, com as citações [n] quando vier das fontes
+             */
+            comentario: string;
+        };
         /** AvaliacaoRAG */
         AvaliacaoRAG: {
             /** Acertos */
@@ -540,6 +581,8 @@ export interface components {
             por_ciclo: components["schemas"]["Grupo"][];
             /** Por Apresentacao */
             por_apresentacao: components["schemas"]["Grupo"][];
+            /** Por Topico */
+            por_topico: components["schemas"]["Grupo"][];
             /** Lacunas */
             lacunas: components["schemas"]["LacunaPorEtapa"][];
             /** Recomendacoes */
@@ -632,17 +675,22 @@ export interface components {
             acertou: boolean;
             /**
              * Diagnostico Correto
-             * @description nome do diagnóstico correto
+             * @description nome completo do diagnóstico correto
              */
             diagnostico_correto: string;
             /**
+             * Por Campo
+             * @default []
+             */
+            por_campo: components["schemas"]["AvaliacaoCampo"][];
+            /**
              * Acertos
-             * @description o que o estudante fez ou concluiu corretamente, só o que está nas mensagens [ESTUDANTE]; o que o caso já entregou não conta como mérito
+             * @description o que o estudante fez certo NA INVESTIGAÇÃO (perguntas, exame físico, exames pedidos e interpretados), só o que está nas mensagens [ESTUDANTE]; o que o caso já entregou não conta como mérito
              */
             acertos: string[];
             /**
              * Inconsistencias
-             * @description erros ou afirmações incorretas do estudante, cada um com a correção; lista vazia se não houver
+             * @description erros ou afirmações incorretas do estudante NA INVESTIGAÇÃO, cada um com a correção; lista vazia se não houver
              */
             inconsistencias: string[];
             /**
@@ -711,6 +759,30 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** ItemRevisao */
+        ItemRevisao: {
+            /** No */
+            no: string;
+            /** Nome */
+            nome: string;
+            /** Especialidade */
+            especialidade: string;
+            /**
+             * Proxima
+             * Format: date
+             */
+            proxima: string;
+            /** Intervalo Dias */
+            intervalo_dias: number;
+            /** Atraso Dias */
+            atraso_dias: number;
+            /** Ultimo Acertou */
+            ultimo_acertou: boolean;
+            /** Tentativas */
+            tentativas: number;
+            /** Acertos */
+            acertos: number;
         };
         /** ItemSimulado */
         ItemSimulado: {
@@ -816,6 +888,11 @@ export interface components {
             ciclo: string;
             /** Quantidade */
             quantidade: number;
+            /**
+             * Um Por No
+             * @default false
+             */
+            um_por_no: boolean;
         };
         /** Ok */
         Ok: {
@@ -914,6 +991,19 @@ export interface components {
              * @default
              */
             conduta: string;
+        };
+        /** Revisao */
+        Revisao: {
+            /** Vencidos */
+            vencidos: components["schemas"]["ItemRevisao"][];
+            /** Sessoes Normais */
+            sessoes_normais: components["schemas"]["ItemRevisao"][][];
+            /** Sessoes Express */
+            sessoes_express: components["schemas"]["ItemRevisao"][][];
+            /** Proximas */
+            proximas: components["schemas"]["ItemRevisao"][];
+            /** Recomendacoes */
+            recomendacoes: components["schemas"]["Recomendacao"][];
         };
         /** SecaoConsultada */
         SecaoConsultada: {
@@ -1305,6 +1395,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Desempenho"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revisao_api_revisao_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                sessao?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Revisao"];
                 };
             };
             /** @description Validation Error */

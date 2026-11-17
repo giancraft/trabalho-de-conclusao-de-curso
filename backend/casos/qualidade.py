@@ -46,7 +46,8 @@ def _citacoes(texto: str) -> list[int]:
 
 def _textos(fb: dict) -> list[str]:
     return [*fb.get("acertos", []), *fb.get("inconsistencias", []), *fb.get("hipoteses_nao_consideradas", []),
-            fb.get("justificativa_pedagogica", ""), *fb.get("conduta_referencia", [])]
+            fb.get("justificativa_pedagogica", ""), *fb.get("conduta_referencia", []),
+            *[a["comentario"] for a in fb.get("por_campo", [])]]
 
 
 def _pct(parte: int, todo: int) -> float | None:

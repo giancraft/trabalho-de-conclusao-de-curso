@@ -19,6 +19,8 @@ from rag.temas import OUTROS
 # Intervalo entre mensagens acima disto é pausa (o caso ficou aberto na aba): não conta
 # como tempo de estudo.
 PAUSA = timedelta(minutes=10)
+TOPICOS = {"diagnostico": "Diagnóstico", "fisiologia": "Fisiologia normal",
+           "fisiopatologia": "Fisiopatologia", "conduta": "Conduta"}
 JANELA_EVOLUCAO = 5  # acerto móvel: últimos N casos
 MINIMO_FRAGIL = 2  # casos para chamar um tema de frágil — 1 erro isolado não é padrão
 LIMITE_FRAGIL = 0.5
@@ -157,6 +159,15 @@ def resumir(casos: list[dict], importantes: list[dict], nomes: dict[str, str], a
     )
     # Ciclos na ordem do curso, não pela contagem.
     por_ciclo = sorted(lista(_grupos(feitos, lambda c: c["ciclo"])), key=lambda l: _ordem_ciclo(l["nome"]))
+    # Tópicos da resposta final (avaliação por campo, feedbacks a partir de nov/2026):
+    # "acertos" aqui são os tópicos corretos; parcial não conta.
+    topicos = [(a["campo"], a["situacao"] == "correto", c["criada_em"])
+               for c in feitos for a in c["feedback"].get("por_campo", [])]
+    por_topico = sorted(
+        lista(_grupos([{"campo": t, "acertou": ok, "criada_em": d} for t, ok, d in topicos], lambda c: c["campo"]),
+              nome=lambda k: TOPICOS.get(k, k)),
+        key=lambda l: list(TOPICOS.values()).index(l["nome"]) if l["nome"] in TOPICOS.values() else 99,
+    )
     por_apresentacao = lista(
         _grupos(com_fonte, lambda c: "Atípica (relato de caso)" if c["tipo"] == "Relato de caso" else "Típica (diretriz)")
     )
@@ -175,6 +186,7 @@ def resumir(casos: list[dict], importantes: list[dict], nomes: dict[str, str], a
         "por_tema": por_tema,
         "por_ciclo": por_ciclo,
         "por_apresentacao": por_apresentacao,
+        "por_topico": por_topico,
         "lacunas": lacunas,
         "recomendacoes": recomendar(por_tema, por_especialidade, importantes, lacunas, casos),
     }
@@ -315,6 +327,15 @@ if __name__ == "__main__":
     assert [(t["nome"], t["casos"], t["acertos"]) for t in r["por_tema"]] == [
         ("Tuberculose", 2, 0), ("Hipertensão", 1, 1), (OUTROS, 1, 1)
     ]
+    com_topicos = [caso(0, True), caso(1, True)]
+    com_topicos[0]["feedback"]["por_campo"] = [{"campo": "conduta", "situacao": "parcial", "comentario": ""},
+                                               {"campo": "diagnostico", "situacao": "correto", "comentario": ""}]
+    com_topicos[1]["feedback"]["por_campo"] = [{"campo": "diagnostico", "situacao": "parcial", "comentario": ""}]
+    t = resumir(com_topicos, [], {}, agora=t0)["por_topico"]
+    assert [(x["nome"], x["casos"], x["acertos"]) for x in t] == [("Diagnóstico", 2, 1), ("Conduta", 1, 0)], (
+        "ordem do formulário; parcial não conta como correto"
+    )
+    assert r["por_topico"] == [], "feedback antigo não tem tópicos"
     ciclos = resumir([caso(0, True, ciclo="internato"), caso(1, True), caso(2, True), caso(3, True, ciclo="básico")],
                      [], {}, agora=t0)["por_ciclo"]
     assert [c["nome"] for c in ciclos] == ["básico", "clínico", "internato"], "ordem do curso"

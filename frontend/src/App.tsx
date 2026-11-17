@@ -7,6 +7,7 @@ import AuthPage from './components/AuthPage'
 import SeletorTemas from './components/SeletorTemas'
 import { lerPreferencias } from './preferencias'
 import Desempenho from './components/Desempenho'
+import Revisao from './components/Revisao'
 import Conta from './components/Conta'
 import AdminIA from './components/AdminIA'
 import ConfigIA from './components/ConfigIA'
@@ -40,6 +41,8 @@ export default function App() {
   const [opcoes, setOpcoes] = useState<Opcoes | null>(null)
   const [progresso, setProgresso] = useState<Progresso | null>(null)
   const [resumo, setResumo] = useState<Simulado | null>(null) // no fim do simulado
+  // Próximo caso do simulado sendo gerado (ou falhou): a tela já é a do caso novo.
+  const [pendente, setPendente] = useState(false)
   const [tela, setTela] = useState<Tela>('caso')
 
   const [conversas, setConversas] = useState<ConversaResumo[]>([])
@@ -89,12 +92,19 @@ export default function App() {
     setMenuAberto(false)
     setProgresso(null)
     setResumo(null)
+    setPendente(false)
     setTela('caso')
   }
 
   function irPara(destino: Tela) {
     setMenuAberto(false)
     setTela(destino)
+  }
+
+  /** Sessão de revisão: um caso novo de cada tema vencido, no ciclo de sempre. */
+  function revisar(nos: string[]) {
+    limparChat()
+    iniciarCaso(() => api.criarSimulado(nos, lerPreferencias().ciclo ?? 'clínico', nos.length, true))
   }
 
   /** "Treinar agora" do painel: um simulado curto só daquele tema, no ciclo de sempre. */
@@ -118,6 +128,7 @@ export default function App() {
       setFontes([])
       setResumo(null)
       setProgresso({ id: caso.simulado_id, ordem: caso.ordem, total: caso.total })
+      setPendente(false)
       setMensagens([{ role: 'assistant', content: caso.apresentacao }])
       atualizarConversas()
     } catch (e) {
@@ -132,8 +143,20 @@ export default function App() {
     iniciarCaso(() => api.criarSimulado(selecao, ciclo, quantidade))
   }
 
+  /** Vai já para a tela do caso seguinte, com o indicador de carregamento, e só então
+   * pede a geração — o caso anterior não fica parado na tela enquanto o novo é gerado. */
   function proximoCaso() {
-    if (progresso) iniciarCaso(() => api.proximoCaso(progresso.id))
+    if (!progresso) return
+    const { id } = progresso
+    setCasoId(null)
+    setCasoAberto(false)
+    setMensagens([])
+    setFeedback(null)
+    setFontes([])
+    setResumo(null)
+    setProgresso({ ...progresso, ordem: progresso.ordem + 1 })
+    setPendente(true)
+    iniciarCaso(() => api.proximoCaso(id))
   }
 
   /** Último caso do simulado encerrado: carrega o resumo. */
@@ -267,8 +290,10 @@ export default function App() {
           <Stethoscope className="h-4 w-4 text-teal-600" />
           <span className="text-sm font-semibold text-zinc-800">Simulador Clínico</span>
         </header>
-        {tela === 'desempenho' ? (
-          <Desempenho ocupado={ocupado} onTreinar={treinar} />
+        {tela === 'revisao' ? (
+          <Revisao ocupado={ocupado} onRevisar={revisar} onTreinar={treinar} />
+        ) : tela === 'desempenho' ? (
+          <Desempenho ocupado={ocupado} onTreinar={treinar} onRevisao={() => irPara('revisao')} />
         ) : tela === 'conta' ? (
           <Conta
             usuario={usuario}
@@ -288,7 +313,7 @@ export default function App() {
           <ConfigIA />
         ) : (
         <>
-        {casoId && progresso && progresso.total > 1 && (
+        {(casoId || pendente) && progresso && progresso.total > 1 && (
           <div className="border-b border-zinc-200 bg-white px-4 py-2 text-center text-xs text-zinc-500">
             Simulado · caso {progresso.ordem} de {progresso.total}
           </div>
@@ -299,7 +324,7 @@ export default function App() {
           feedback={feedback}
           fontes={fontes}
           erro={erro}
-          temCaso={mensagens.length > 0 || digitando}
+          temCaso={mensagens.length > 0 || digitando || pendente}
           inicio={
             <>
               {erro && (
@@ -347,6 +372,16 @@ export default function App() {
             </div>
           }
         />
+        {pendente && erro && !ocupado && progresso && (
+          <div className="flex justify-center border-t border-zinc-200 bg-white py-3">
+            <button
+              onClick={() => iniciarCaso(() => api.proximoCaso(progresso.id))}
+              className="rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-teal-500"
+            >
+              Tentar de novo
+            </button>
+          </div>
+        )}
         {casoId && casoAberto && !feedback && (
           <Composer
             ocupado={ocupado}

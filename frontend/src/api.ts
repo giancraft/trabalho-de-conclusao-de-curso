@@ -11,6 +11,7 @@ import type {
   Opcoes,
   QualidadeIA,
   RespostaFinal,
+  Revisao,
   Simulado,
   Usuario,
 } from './types'
@@ -111,11 +112,12 @@ export async function criarSimulado(
   selecao: string[],
   ciclo: string,
   quantidade: number,
+  umPorNo = false, // revisão: um caso de cada tema, na ordem
 ): Promise<CasoAberto> {
   const res = await fetch('/api/simulados', {
     method: 'POST',
     headers: json,
-    body: JSON.stringify({ selecao, ciclo, quantidade }),
+    body: JSON.stringify({ selecao, ciclo, quantidade, um_por_no: umPorNo }),
   })
   return (await checar(res)).json()
 }
@@ -159,6 +161,11 @@ export async function enviarDiagnostico(
     body: JSON.stringify(resposta),
   })
   return (await checar(res)).json()
+}
+
+/** Revisão espaçada por tema: vencidos, sessões prontas, próximas e recomendações. */
+export async function buscarRevisao(): Promise<Revisao> {
+  return (await checar(await fetch('/api/revisao'))).json()
 }
 
 /** Painel do estudante: KPIs, evolução, recortes e recomendações (calculados no servidor). */
